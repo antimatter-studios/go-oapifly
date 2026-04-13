@@ -1,8 +1,11 @@
+---
+name: dev-loop
+description: Iterative development cycle with baseline test contract. Use when making non-trivial changes — refactoring, features, bug fixes, or code quality improvements.
+---
+
 # Development Loop
 
 Iterative development cycle: test → analyze → implement → test → enhance tests → test → repeat.
-
-Use this skill when making non-trivial changes to the codebase — refactoring, adding features, fixing bugs, or improving code quality.
 
 ## Arguments
 
