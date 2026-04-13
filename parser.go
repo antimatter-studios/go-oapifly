@@ -1,7 +1,6 @@
 package oapifly
 
 import (
-	"encoding/json"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -10,30 +9,322 @@ import (
 	"strings"
 )
 
-// detectJSONType uses reflection and json.Marshal to infer the JSON type.
-func detectJSONType(t reflect.Type) string {
+// ---------------------------------------------------------------------------
+// tagSet — multi-value annotation storage
+// ---------------------------------------------------------------------------
+
+type tagSet struct {
+	entries map[string][]string
+}
+
+func newTagSet() tagSet {
+	return tagSet{entries: map[string][]string{}}
+}
+
+func (t tagSet) add(key, value string) {
+	t.entries[key] = append(t.entries[key], value)
+}
+
+func (t tagSet) get(key string) string {
+	if vals, ok := t.entries[key]; ok && len(vals) > 0 {
+		return vals[0]
+	}
+	return ""
+}
+
+func (t tagSet) getAll(key string) []string {
+	return t.entries[key]
+}
+
+func (t tagSet) has(key string) bool {
+	vals, ok := t.entries[key]
+	return ok && len(vals) > 0
+}
+
+// ---------------------------------------------------------------------------
+// schemaRegistry — tracks discovered schemas and resolves type references
+// ---------------------------------------------------------------------------
+
+type schemaRegistry struct {
+	schemas  map[string]map[string]interface{}
+	typeDirs []string
+}
+
+func newSchemaRegistry(typeDirs []string) *schemaRegistry {
+	return &schemaRegistry{
+		schemas:  map[string]map[string]interface{}{},
+		typeDirs: typeDirs,
+	}
+}
+
+// resolve strips "types." prefix, registers the schema if unknown, and returns
+// the clean reference name.
+func (r *schemaRegistry) resolve(refType string) string {
+	refName := strings.TrimPrefix(refType, "types.")
+	if _, ok := r.schemas[refName]; !ok {
+		typeFile := findTypeFile(refName, r.typeDirs)
+		if typeFile != "" {
+			if t := findReflectTypeByName(refName); t != nil {
+				r.schemas[refName] = generateSchemaForTypeReflect(t)
+			} else {
+				r.schemas[refName] = map[string]interface{}{"type": "object"}
+			}
+		} else {
+			r.schemas[refName] = map[string]interface{}{"type": "object"}
+		}
+	}
+	return refName
+}
+
+// ---------------------------------------------------------------------------
+// @Param parsing
+// ---------------------------------------------------------------------------
+
+// parsedParam is the structured result of parsing a single @Param annotation.
+type parsedParam struct {
+	Name        string
+	In          string // path, query, header, body, formData
+	DataType    string
+	Required    bool
+	Description string
+	Example     string
+}
+
+// parseParam parses a single @Param tag value into structured data.
+// Format: name location dataType required "description" [example(...)]
+func parseParam(value string) (parsedParam, bool) {
+	parts := strings.Fields(value)
+	if len(parts) < 4 {
+		return parsedParam{}, false
+	}
+
+	p := parsedParam{
+		Name:     parts[0],
+		In:       parts[1],
+		DataType: parts[2],
+		Required: parts[3] == "true",
+	}
+
+	// Extract description from quoted text
+	rest := strings.Join(parts[4:], " ")
+	if start := strings.Index(rest, "\""); start >= 0 {
+		if end := strings.Index(rest[start+1:], "\""); end >= 0 {
+			p.Description = rest[start+1 : start+1+end]
+		}
+	}
+
+	// Extract example from attributes
+	for i := 4; i < len(parts); i++ {
+		part := parts[i]
+		if strings.HasPrefix(part, "example(") && strings.HasSuffix(part, ")") {
+			p.Example = part[len("example(") : len(part)-1]
+		} else if part == "example" && i+1 < len(parts) {
+			next := parts[i+1]
+			if strings.HasPrefix(next, "\"") && strings.HasSuffix(next, "\"") && len(next) > 1 {
+				p.Example = next[1 : len(next)-1]
+			}
+		}
+	}
+
+	return p, true
+}
+
+// parseAllParams parses all @Param tag values.
+func parseAllParams(paramTags []string) []parsedParam {
+	var params []parsedParam
+	for _, tag := range paramTags {
+		if p, ok := parseParam(tag); ok {
+			params = append(params, p)
+		}
+	}
+	return params
+}
+
+// ---------------------------------------------------------------------------
+// Swaggo-to-OpenAPI type mapping
+// ---------------------------------------------------------------------------
+
+// dataTypeToOpenAPIType converts a swaggo data type to an OpenAPI type string.
+func dataTypeToOpenAPIType(dataType string) string {
+	switch strings.ToLower(dataType) {
+	case "int", "integer":
+		return "integer"
+	case "number", "float", "float64":
+		return "number"
+	case "bool", "boolean":
+		return "boolean"
+	case "file":
+		return "string"
+	default:
+		return "string"
+	}
+}
+
+// dataTypeToFormat returns the OpenAPI format for special types (e.g. "binary" for file).
+func dataTypeToFormat(dataType string) string {
+	if strings.ToLower(dataType) == "file" {
+		return "binary"
+	}
+	return ""
+}
+
+// dataTypeSchema builds a Parameter.Schema map for a swaggo data type.
+func dataTypeSchema(dataType string) map[string]string {
+	schema := map[string]string{"type": dataTypeToOpenAPIType(dataType)}
+	if f := dataTypeToFormat(dataType); f != "" {
+		schema["format"] = f
+	}
+	return schema
+}
+
+// isStructRef returns true if the data type refers to a struct (not a primitive).
+func isStructRef(dataType string) bool {
+	switch strings.ToLower(dataType) {
+	case "string", "int", "integer", "number", "float", "float64",
+		"bool", "boolean", "file":
+		return false
+	default:
+		return true
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Reflection-based type mapping (for runtime schema generation)
+// ---------------------------------------------------------------------------
+
+// goKindToJSONType maps a Go reflect.Type to its JSON/OpenAPI type string.
+// Distinguishes integer from number per the OpenAPI spec.
+func goKindToJSONType(t reflect.Type) string {
 	if t.Kind() == reflect.Ptr {
 		t = t.Elem()
 	}
-	v := reflect.New(t).Elem().Interface()
-	data, _ := json.Marshal(v)
-	var out interface{}
-	json.Unmarshal(data, &out)
-	switch out.(type) {
-	case string:
+	switch t.Kind() {
+	case reflect.String:
 		return "string"
-	case float64:
-		return "number"
-	case bool:
+	case reflect.Bool:
 		return "boolean"
-	case []interface{}:
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
+		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		return "integer"
+	case reflect.Float32, reflect.Float64:
+		return "number"
+	case reflect.Slice, reflect.Array:
 		return "array"
-	case map[string]interface{}:
+	case reflect.Map, reflect.Struct:
 		return "object"
 	default:
 		return "object"
 	}
 }
+
+// goKindToOpenAPIFormat returns the OpenAPI format hint for a Go type
+// (e.g. "int32", "int64", "float", "double"). Returns "" if no format applies.
+func goKindToOpenAPIFormat(t reflect.Type) string {
+	if t.Kind() == reflect.Ptr {
+		t = t.Elem()
+	}
+	switch t.Kind() {
+	case reflect.Int32:
+		return "int32"
+	case reflect.Int, reflect.Int64:
+		return "int64"
+	case reflect.Float32:
+		return "float"
+	case reflect.Float64:
+		return "double"
+	default:
+		return ""
+	}
+}
+
+// resolveJSONFieldName extracts the JSON field name and options from a struct
+// field's json tag. Returns skip=true for fields tagged with json:"-".
+func resolveJSONFieldName(field reflect.StructField) (name string, omitempty bool, skip bool) {
+	name = field.Name
+	tag, ok := field.Tag.Lookup("json")
+	if !ok {
+		return name, false, false
+	}
+	parts := strings.Split(tag, ",")
+	if parts[0] == "-" {
+		return "", false, true
+	}
+	if parts[0] != "" {
+		name = parts[0]
+	}
+	for _, part := range parts[1:] {
+		if part == "omitempty" {
+			omitempty = true
+			break
+		}
+	}
+	return name, omitempty, false
+}
+
+// resolveFieldTypeReflect resolves a struct field type to OpenAPI type info.
+func resolveFieldTypeReflect(rt reflect.Type) fieldTypeInfo {
+	if rt.Kind() == reflect.Ptr {
+		rt = rt.Elem()
+	}
+	jsonType := goKindToJSONType(rt)
+
+	// Struct → return as schema $ref
+	if rt.Kind() == reflect.Struct && jsonType == "object" {
+		return fieldTypeInfo{Ref: rt.Name()}
+	}
+
+	// Slice/Array → include items with element type
+	if rt.Kind() == reflect.Slice || rt.Kind() == reflect.Array {
+		elemType := rt.Elem()
+		if elemType.Kind() == reflect.Ptr {
+			elemType = elemType.Elem()
+		}
+		items := map[string]interface{}{"type": goKindToJSONType(elemType)}
+		if f := goKindToOpenAPIFormat(elemType); f != "" {
+			items["format"] = f
+		}
+		return fieldTypeInfo{Schema: map[string]interface{}{
+			"type":  "array",
+			"items": items,
+		}}
+	}
+
+	// Primitive → type + optional format
+	schema := map[string]interface{}{"type": jsonType}
+	if f := goKindToOpenAPIFormat(rt); f != "" {
+		schema["format"] = f
+	}
+	return fieldTypeInfo{Schema: schema}
+}
+
+// generateSchemaForTypeReflect generates a JSON Schema map using Go reflection.
+func generateSchemaForTypeReflect(rt reflect.Type) map[string]interface{} {
+	if rt.Kind() == reflect.Ptr {
+		rt = rt.Elem()
+	}
+	props := map[string]interface{}{}
+	required := []string{}
+	for i := 0; i < rt.NumField(); i++ {
+		name, omitempty, skip := resolveJSONFieldName(rt.Field(i))
+		if skip || name == "" {
+			continue
+		}
+		fieldType := resolveFieldTypeReflect(rt.Field(i).Type)
+		props[name] = fieldType.Schema
+		if !omitempty {
+			required = append(required, name)
+		}
+	}
+	return map[string]interface{}{
+		"type":       "object",
+		"properties": props,
+		"required":   required,
+	}
+}
+
+// ---------------------------------------------------------------------------
+// AST parsing
+// ---------------------------------------------------------------------------
 
 // extractSchemaAnnotatedStructs finds all struct names with a @schema annotation.
 func extractSchemaAnnotatedStructs(f *ast.File) []string {
@@ -62,234 +353,6 @@ func extractSchemaAnnotatedStructs(f *ast.File) []string {
 	return structs
 }
 
-// buildPathItemWithSchemas parses swaggo tags and builds a PathItem with schema references.
-func buildPathItemWithSchemas(tags map[string]string, schemaTypes map[string]map[string]interface{}) PathItem {
-	summary := tags["Summary"]
-	description := tags["Description"]
-	tagsList := []string{}
-	if v, ok := tags["Tags"]; ok {
-		tagsList = strings.Split(v, ",")
-	}
-	parameters := []Parameter{}
-
-	if routerTag, ok := tags["Router"]; ok {
-		fields := strings.Fields(routerTag)
-		if len(fields) == 2 {
-			path := fields[0]
-			paramExamples := map[string]string{}
-			for k, v := range tags {
-				if k == "Param" {
-					parts := strings.Fields(v)
-					if len(parts) >= 5 && parts[1] == "path" {
-						paramName := parts[0]
-						exampleVal := ""
-						for i := 5; i < len(parts); i++ {
-							p := parts[i]
-							if strings.HasPrefix(p, "example(") && strings.HasSuffix(p, ")") {
-								exampleVal = p[len("example(") : len(p)-1]
-							} else if p == "example" && i+1 < len(parts) {
-								next := parts[i+1]
-								if strings.HasPrefix(next, "\"") && strings.HasSuffix(next, "\"") && len(next) > 1 {
-									exampleVal = next[1 : len(next)-1]
-								}
-							}
-						}
-						if exampleVal != "" {
-							paramExamples[paramName] = exampleVal
-						}
-					}
-				}
-			}
-			start := 0
-			for start < len(path) {
-				open := strings.Index(path[start:], "{")
-				if open == -1 {
-					break
-				}
-				open += start
-				close := strings.Index(path[open:], "}")
-				if close == -1 {
-					break
-				}
-				close += open
-				paramName := path[open+1 : close]
-				exampleVal := paramName
-				if ex, ok := paramExamples[paramName]; ok && ex != "" {
-					exampleVal = ex
-				}
-				parameters = append(parameters, Parameter{
-					Name:        paramName,
-					In:          "path",
-					Description: "Path parameter '" + paramName + "'",
-					Required:    true,
-					Schema:      map[string]string{"type": "string"},
-					Example:     exampleVal,
-				})
-				start = close + 1
-			}
-		}
-	}
-
-	responses := map[string]Response{}
-
-	for k, v := range tags {
-		if k == "Success" || k == "Failure" {
-			fields := strings.Fields(v)
-			if len(fields) >= 3 {
-				status := fields[0]
-				openapiType := fields[1]
-				refType := ""
-				if len(fields) > 2 {
-					refType = fields[2]
-				}
-				desc := ""
-				if len(fields) > 3 {
-					desc = strings.Join(fields[3:], " ")
-				}
-				content := map[string]interface{}{}
-				if refType != "" {
-					refName := refType
-					if strings.HasPrefix(refType, "types.") {
-						refName = strings.TrimPrefix(refType, "types.")
-					}
-					if _, ok := schemaTypes[refName]; !ok {
-						typeFile := findTypeFile(refName)
-						if typeFile != "" {
-							if t := findReflectTypeByName(refName); t != nil {
-								schemaTypes[refName] = generateSchemaForTypeReflect(t)
-							} else {
-								schemaTypes[refName] = map[string]interface{}{"type": "object"}
-							}
-						} else {
-							schemaTypes[refName] = map[string]interface{}{"type": "object"}
-						}
-					}
-					if openapiType == "{array}" {
-						content["application/json"] = map[string]interface{}{
-							"schema": map[string]interface{}{
-								"type":  "array",
-								"items": map[string]interface{}{"$ref": "#/components/schemas/" + refName},
-							},
-						}
-					} else {
-						content["application/json"] = map[string]interface{}{
-							"schema": map[string]interface{}{"$ref": "#/components/schemas/" + refName},
-						}
-					}
-				}
-				responses[status] = Response{
-					Description: strings.Trim(desc, "\""),
-					Content:     content,
-				}
-			}
-		}
-	}
-
-	return PathItem{
-		Summary:     summary,
-		Description: description,
-		Tags:        tagsList,
-		Parameters:  parameters,
-		Responses:   responses,
-	}
-}
-
-// findTypeFile tries to locate the Go file containing a struct definition.
-func findTypeFile(typeName string) string {
-	typesDir := "types"
-	entries, err := os.ReadDir(typesDir)
-	if err != nil {
-		return ""
-	}
-	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".go") {
-			continue
-		}
-		path := typesDir + "/" + entry.Name()
-		fset := token.NewFileSet()
-		file, err := parser.ParseFile(fset, path, nil, parser.ParseComments)
-		if err != nil {
-			continue
-		}
-		for _, decl := range file.Decls {
-			genDecl, ok := decl.(*ast.GenDecl)
-			if !ok || genDecl.Tok != token.TYPE {
-				continue
-			}
-			for _, spec := range genDecl.Specs {
-				typeSpec, ok := spec.(*ast.TypeSpec)
-				if !ok {
-					continue
-				}
-				if typeSpec.Name.Name == typeName {
-					return path
-				}
-			}
-		}
-	}
-	return ""
-}
-
-// resolveFieldTypeReflect resolves a struct field type to OpenAPI type info using reflection.
-func resolveFieldTypeReflect(rt reflect.Type) fieldTypeInfo {
-	if rt.Kind() == reflect.Ptr {
-		rt = rt.Elem()
-	}
-	jsonType := detectJSONType(rt)
-	if rt.Kind() == reflect.Struct && jsonType == "object" {
-		return fieldTypeInfo{Ref: rt.Name()}
-	}
-	return fieldTypeInfo{Schema: map[string]interface{}{"type": jsonType}}
-}
-
-// generateSchemaForTypeReflect generates a JSON Schema map using Go reflection.
-func generateSchemaForTypeReflect(rt reflect.Type) map[string]interface{} {
-	if rt.Kind() == reflect.Ptr {
-		rt = rt.Elem()
-	}
-	props := map[string]interface{}{}
-	required := []string{}
-	for i := 0; i < rt.NumField(); i++ {
-		field := rt.Field(i)
-		jsonName := field.Name
-		if tag, ok := field.Tag.Lookup("json"); ok {
-			parts := strings.Split(tag, ",")
-			if len(parts) > 0 && parts[0] != "" && parts[0] != "-" {
-				jsonName = parts[0]
-			}
-		}
-		if jsonName == "-" || jsonName == "" {
-			continue
-		}
-		fieldType := resolveFieldTypeReflect(field.Type)
-		props[jsonName] = fieldType.Schema
-		omitempty := false
-		if tag, ok := field.Tag.Lookup("json"); ok {
-			parts := strings.Split(tag, ",")
-			for _, part := range parts[1:] {
-				if part == "omitempty" {
-					omitempty = true
-					break
-				}
-			}
-		}
-		if !omitempty {
-			required = append(required, jsonName)
-		}
-	}
-	return map[string]interface{}{
-		"type":       "object",
-		"properties": props,
-		"required":   required,
-	}
-}
-
-// findReflectTypeByName is a stub for resolving a struct name to reflect.Type.
-// TODO: Implement using a type registry for full schema resolution.
-func findReflectTypeByName(name string) reflect.Type {
-	return nil
-}
-
 // parseFile parses a Go source file and returns the AST.
 func parseFile(path string) (*ast.File, error) {
 	src, err := os.ReadFile(path)
@@ -297,34 +360,33 @@ func parseFile(path string) (*ast.File, error) {
 		return nil, err
 	}
 	fset := token.NewFileSet()
-	f, err := parser.ParseFile(fset, path, src, parser.ParseComments)
-	if err != nil {
-		return nil, err
-	}
-	return f, nil
+	return parser.ParseFile(fset, path, src, parser.ParseComments)
 }
 
-// extractHandlerDocs extracts swaggo tags from handler methods with @Router annotations.
-func extractHandlerDocs(f *ast.File) []map[string]string {
-	docs := []map[string]string{}
+// extractHandlerDocs extracts swaggo tags from functions with @Router annotations.
+// Supports both receiver methods and standalone handler functions.
+func extractHandlerDocs(f *ast.File) []tagSet {
+	var docs []tagSet
 	for _, decl := range f.Decls {
 		fn, ok := decl.(*ast.FuncDecl)
-		if !ok || fn.Recv == nil || fn.Doc == nil {
+		if !ok || fn.Doc == nil {
 			continue
 		}
-		tags := map[string]string{}
+		tags := newTagSet()
 		for _, comment := range fn.Doc.List {
 			line := strings.TrimSpace(strings.TrimPrefix(comment.Text, "//"))
 			if strings.HasPrefix(line, "@") {
 				fields := strings.Fields(line)
+				key := strings.TrimPrefix(fields[0], "@")
 				if len(fields) > 1 {
-					tag := strings.TrimPrefix(fields[0], "@")
-					value := strings.Join(fields[1:], " ")
-					tags[tag] = value
+					tags.add(key, strings.Join(fields[1:], " "))
+				} else {
+					// Single-word annotations like @Deprecated
+					tags.add(key, "")
 				}
 			}
 		}
-		if _, ok := tags["Router"]; ok {
+		if tags.has("Router") {
 			docs = append(docs, tags)
 		}
 	}
@@ -337,7 +399,280 @@ func parseRouterTag(router string) (string, string) {
 	if len(fields) != 2 {
 		return "", ""
 	}
-	path := fields[0]
-	method := strings.Trim(fields[1], "[]")
-	return path, strings.ToLower(method)
+	return fields[0], strings.ToLower(strings.Trim(fields[1], "[]"))
+}
+
+// ---------------------------------------------------------------------------
+// OpenAPI building
+// ---------------------------------------------------------------------------
+
+// buildParameters builds the OpenAPI parameters list from parsed @Param data
+// and URL path template placeholders.
+func buildParameters(routerPath string, params []parsedParam) []Parameter {
+	var result []Parameter
+
+	// Index path param metadata for merging with URL template
+	pathMeta := map[string]parsedParam{}
+	for _, p := range params {
+		if p.In == "path" {
+			pathMeta[p.Name] = p
+		}
+	}
+
+	// Extract path params from URL template, merging with @Param metadata
+	start := 0
+	for start < len(routerPath) {
+		open := strings.Index(routerPath[start:], "{")
+		if open == -1 {
+			break
+		}
+		open += start
+		close := strings.Index(routerPath[open:], "}")
+		if close == -1 {
+			break
+		}
+		close += open
+		name := routerPath[open+1 : close]
+
+		desc := "Path parameter '" + name + "'"
+		schema := map[string]string{"type": "string"}
+		var example interface{} = name
+
+		if meta, ok := pathMeta[name]; ok {
+			if meta.Description != "" {
+				desc = meta.Description
+			}
+			schema = dataTypeSchema(meta.DataType)
+			if meta.Example != "" {
+				example = meta.Example
+			}
+		}
+
+		result = append(result, Parameter{
+			Name:        name,
+			In:          "path",
+			Description: desc,
+			Required:    true,
+			Schema:      schema,
+			Example:     example,
+		})
+		start = close + 1
+	}
+
+	// Add query and header params
+	for _, p := range params {
+		if p.In != "query" && p.In != "header" {
+			continue
+		}
+		param := Parameter{
+			Name:        p.Name,
+			In:          p.In,
+			Description: p.Description,
+			Required:    p.Required,
+			Schema:      dataTypeSchema(p.DataType),
+		}
+		if p.Example != "" {
+			param.Example = p.Example
+		}
+		result = append(result, param)
+	}
+
+	return result
+}
+
+// buildRequestBody builds an OpenAPI request body from body/formData @Param entries.
+// Returns nil if no body or formData params are present.
+func buildRequestBody(params []parsedParam, reg *schemaRegistry) *RequestBody {
+	var bodyParams []parsedParam
+	var formParams []parsedParam
+
+	for _, p := range params {
+		switch p.In {
+		case "body":
+			bodyParams = append(bodyParams, p)
+		case "formData":
+			formParams = append(formParams, p)
+		}
+	}
+
+	if len(bodyParams) == 0 && len(formParams) == 0 {
+		return nil
+	}
+
+	if len(bodyParams) > 0 {
+		p := bodyParams[0]
+		var schema map[string]interface{}
+		if isStructRef(p.DataType) {
+			refName := reg.resolve(p.DataType)
+			schema = map[string]interface{}{"$ref": "#/components/schemas/" + refName}
+		} else {
+			schema = map[string]interface{}{"type": dataTypeToOpenAPIType(p.DataType)}
+			if f := dataTypeToFormat(p.DataType); f != "" {
+				schema["format"] = f
+			}
+		}
+		return &RequestBody{
+			Description: p.Description,
+			Required:    p.Required,
+			Content: map[string]interface{}{
+				"application/json": map[string]interface{}{"schema": schema},
+			},
+		}
+	}
+
+	// formData params → multipart/form-data
+	props := map[string]interface{}{}
+	var required []string
+	for _, p := range formParams {
+		s := map[string]interface{}{"type": dataTypeToOpenAPIType(p.DataType)}
+		if f := dataTypeToFormat(p.DataType); f != "" {
+			s["format"] = f
+		}
+		props[p.Name] = s
+		if p.Required {
+			required = append(required, p.Name)
+		}
+	}
+	schema := map[string]interface{}{
+		"type":       "object",
+		"properties": props,
+	}
+	if len(required) > 0 {
+		schema["required"] = required
+	}
+	desc := ""
+	if formParams[0].Description != "" {
+		desc = formParams[0].Description
+	}
+	return &RequestBody{
+		Description: desc,
+		Required:    len(required) > 0,
+		Content: map[string]interface{}{
+			"multipart/form-data": map[string]interface{}{"schema": schema},
+		},
+	}
+}
+
+// buildResponse parses a @Success or @Failure tag value and returns the
+// status code and Response. Registers any referenced schema types.
+func buildResponse(value string, reg *schemaRegistry) (string, Response) {
+	fields := strings.Fields(value)
+	if len(fields) < 3 {
+		return "", Response{}
+	}
+	status := fields[0]
+	openapiType := fields[1]
+	refType := fields[2]
+	desc := ""
+	if len(fields) > 3 {
+		desc = strings.Trim(strings.Join(fields[3:], " "), "\"")
+	}
+
+	content := map[string]interface{}{}
+	if refType != "" {
+		refName := reg.resolve(refType)
+		ref := map[string]interface{}{"$ref": "#/components/schemas/" + refName}
+		if openapiType == "{array}" {
+			content["application/json"] = map[string]interface{}{
+				"schema": map[string]interface{}{"type": "array", "items": ref},
+			}
+		} else {
+			content["application/json"] = map[string]interface{}{"schema": ref}
+		}
+	}
+	return status, Response{Description: desc, Content: content}
+}
+
+// buildPathItem parses swaggo tags and builds a PathItem with schema references.
+func buildPathItem(tags tagSet, reg *schemaRegistry) PathItem {
+	var tagsList []string
+	if v := tags.get("Tags"); v != "" {
+		parts := strings.Split(v, ",")
+		for i, t := range parts {
+			parts[i] = strings.TrimSpace(t)
+		}
+		tagsList = parts
+	}
+
+	params := parseAllParams(tags.getAll("Param"))
+
+	var parameters []Parameter
+	if routerTag := tags.get("Router"); routerTag != "" {
+		fields := strings.Fields(routerTag)
+		if len(fields) == 2 {
+			parameters = buildParameters(fields[0], params)
+		}
+	}
+
+	requestBody := buildRequestBody(params, reg)
+
+	responses := map[string]Response{}
+	for _, v := range tags.getAll("Success") {
+		if status, resp := buildResponse(v, reg); status != "" {
+			responses[status] = resp
+		}
+	}
+	for _, v := range tags.getAll("Failure") {
+		if status, resp := buildResponse(v, reg); status != "" {
+			responses[status] = resp
+		}
+	}
+
+	return PathItem{
+		Summary:     tags.get("Summary"),
+		Description: tags.get("Description"),
+		OperationID: tags.get("ID"),
+		Tags:        tagsList,
+		Deprecated:  tags.has("Deprecated"),
+		Parameters:  parameters,
+		RequestBody: requestBody,
+		Responses:   responses,
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Type file discovery
+// ---------------------------------------------------------------------------
+
+// findTypeFile searches dirs for a Go file containing a type with the given name.
+func findTypeFile(typeName string, dirs []string) string {
+	for _, dir := range dirs {
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			continue
+		}
+		for _, entry := range entries {
+			if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".go") {
+				continue
+			}
+			path := dir + "/" + entry.Name()
+			fset := token.NewFileSet()
+			file, err := parser.ParseFile(fset, path, nil, parser.ParseComments)
+			if err != nil {
+				continue
+			}
+			for _, decl := range file.Decls {
+				genDecl, ok := decl.(*ast.GenDecl)
+				if !ok || genDecl.Tok != token.TYPE {
+					continue
+				}
+				for _, spec := range genDecl.Specs {
+					typeSpec, ok := spec.(*ast.TypeSpec)
+					if !ok {
+						continue
+					}
+					if typeSpec.Name.Name == typeName {
+						return path
+					}
+				}
+			}
+		}
+	}
+	return ""
+}
+
+// findReflectTypeByName is a stub for resolving a struct name to reflect.Type.
+// TODO: Implement using a type registry for full schema resolution.
+func findReflectTypeByName(name string) reflect.Type {
+	return nil
 }

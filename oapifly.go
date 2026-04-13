@@ -24,8 +24,8 @@ package oapifly
 
 import (
 	"encoding/json"
+	"fmt"
 	"path/filepath"
-	"reflect"
 	"strings"
 
 	yaml "gopkg.in/yaml.v2"
@@ -35,6 +35,10 @@ import (
 // and produces an OpenAPI 3.0 specification at runtime.
 type Generator struct {
 	Config Config
+
+	// Warnings collects non-fatal issues encountered during generation
+	// (e.g. files that failed to parse). Reset on each call to Generate.
+	Warnings []string
 }
 
 // New creates a new Generator with the given config.
@@ -42,69 +46,86 @@ func New(config Config) *Generator {
 	if config.Version == "" {
 		config.Version = "dev"
 	}
+	if len(config.TypeDirs) == 0 {
+		config.TypeDirs = []string{"types"}
+	}
 	return &Generator{Config: config}
+}
+
+// resolveFiles expands glob patterns and returns matching file paths.
+func resolveFiles(patterns []string) []string {
+	var files []string
+	for _, pattern := range patterns {
+		matches, err := filepath.Glob(pattern)
+		if err == nil {
+			files = append(files, matches...)
+		}
+	}
+	return files
 }
 
 // Generate builds and returns the OpenAPI spec as a map.
 func (g *Generator) Generate() map[string]interface{} {
-	paths := map[string]map[string]PathItem{}
-	schemaTypes := map[string]map[string]interface{}{}
+	g.Warnings = nil
 
-	files := []string{}
-	for _, pattern := range g.Config.ScanPatterns {
-		matches, err := filepath.Glob(pattern)
-		if err == nil && len(matches) > 0 {
-			files = append(files, matches...)
-		}
-	}
+	reg := newSchemaRegistry(g.Config.TypeDirs)
+	paths := map[string]map[string]PathItem{}
+
+	files := resolveFiles(g.Config.ScanPatterns)
 	if len(files) == 0 {
 		return map[string]interface{}{"error": "No files found for scan patterns: " + strings.Join(g.Config.ScanPatterns, ", ")}
 	}
+
 	for _, file := range files {
 		astFile, err := parseFile(file)
 		if err != nil {
+			g.Warnings = append(g.Warnings, fmt.Sprintf("failed to parse %s: %v", file, err))
 			continue
 		}
 		handlers := extractHandlerDocs(astFile)
 		for _, tags := range handlers {
-			path, method := parseRouterTag(tags["Router"])
+			path, method := parseRouterTag(tags.get("Router"))
 			if path == "" || method == "" {
 				continue
 			}
 			if _, ok := paths[path]; !ok {
 				paths[path] = map[string]PathItem{}
 			}
-			paths[path][method] = buildPathItemWithSchemas(tags, schemaTypes)
+			if _, exists := paths[path][method]; exists {
+				g.Warnings = append(g.Warnings, fmt.Sprintf("duplicate handler for %s %s, overwriting previous", strings.ToUpper(method), path))
+			}
+			paths[path][method] = buildPathItem(tags, reg)
 		}
 		schemaStructs := extractSchemaAnnotatedStructs(astFile)
 		for _, structName := range schemaStructs {
-			if _, ok := schemaTypes[structName]; !ok {
-				typeFile := findTypeFile(structName)
+			if _, ok := reg.schemas[structName]; !ok {
+				typeFile := findTypeFile(structName, reg.typeDirs)
 				if typeFile != "" {
-					var structType reflect.Type
 					if t := findReflectTypeByName(structName); t != nil {
-						structType = t
-					}
-					if structType != nil {
-						schemaTypes[structName] = generateSchemaForTypeReflect(structType)
+						reg.schemas[structName] = generateSchemaForTypeReflect(t)
 					} else {
-						schemaTypes[structName] = map[string]interface{}{"type": "object"}
+						reg.schemas[structName] = map[string]interface{}{"type": "object"}
 					}
 				} else {
-					schemaTypes[structName] = map[string]interface{}{"type": "object"}
+					reg.schemas[structName] = map[string]interface{}{"type": "object"}
 				}
 			}
 		}
 	}
 
+	info := map[string]string{"title": g.Config.Title, "version": g.Config.Version}
+	if g.Config.Description != "" {
+		info["description"] = g.Config.Description
+	}
+
 	components := map[string]interface{}{}
-	if len(schemaTypes) > 0 {
-		components["schemas"] = schemaTypes
+	if len(reg.schemas) > 0 {
+		components["schemas"] = reg.schemas
 	}
 
 	return map[string]interface{}{
 		"openapi":    "3.0.0",
-		"info":       map[string]string{"title": g.Config.Title, "version": g.Config.Version},
+		"info":       info,
 		"paths":      paths,
 		"components": components,
 	}
