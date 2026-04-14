@@ -39,6 +39,10 @@ type Generator struct {
 	// Warnings collects non-fatal issues encountered during generation
 	// (e.g. files that failed to parse). Reset on each call to Generate.
 	Warnings []string
+
+	// cached holds the generated spec after the first call to Generate.
+	// Source files don't change at runtime, so the spec is computed once.
+	cached map[string]interface{}
 }
 
 // New creates a new Generator with the given config.
@@ -65,7 +69,12 @@ func resolveFiles(patterns []string) []string {
 }
 
 // Generate builds and returns the OpenAPI spec as a map.
+// The result is cached after the first call since source files don't change at runtime.
 func (g *Generator) Generate() map[string]interface{} {
+	if g.cached != nil {
+		return g.cached
+	}
+
 	g.Warnings = nil
 
 	reg := newSchemaRegistry(g.Config.TypeDirs)
@@ -125,12 +134,14 @@ func (g *Generator) Generate() map[string]interface{} {
 		components["schemas"] = reg.schemas
 	}
 
-	return map[string]interface{}{
+	g.cached = map[string]interface{}{
 		"openapi":    "3.0.0",
 		"info":       info,
 		"paths":      paths,
 		"components": components,
 	}
+
+	return g.cached
 }
 
 // JSON returns the OpenAPI spec as JSON bytes.

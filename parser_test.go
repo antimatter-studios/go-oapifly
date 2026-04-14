@@ -817,7 +817,7 @@ func TestSchemaRegistry_AlreadyRegistered(t *testing.T) {
 
 func TestBuildResponse_Object(t *testing.T) {
 	reg := newSchemaRegistry(nil)
-	status, resp := buildResponse(`200 {object} User "OK"`, reg)
+	status, resp := buildResponse(`200 {object} User "OK"`, "", reg)
 
 	if status != "200" {
 		t.Errorf("status = %q", status)
@@ -834,7 +834,7 @@ func TestBuildResponse_Object(t *testing.T) {
 
 func TestBuildResponse_Array(t *testing.T) {
 	reg := newSchemaRegistry(nil)
-	_, resp := buildResponse(`200 {array} Item "OK"`, reg)
+	_, resp := buildResponse(`200 {array} Item "OK"`, "", reg)
 
 	content := resp.Content["application/json"].(map[string]interface{})
 	schema := content["schema"].(map[string]interface{})
@@ -845,7 +845,7 @@ func TestBuildResponse_Array(t *testing.T) {
 
 func TestBuildResponse_TooFewFields(t *testing.T) {
 	reg := newSchemaRegistry(nil)
-	status, _ := buildResponse("200 {object}", reg)
+	status, _ := buildResponse("200 {object}", "", reg)
 	if status != "" {
 		t.Errorf("expected empty status for malformed input, got %q", status)
 	}
@@ -853,7 +853,7 @@ func TestBuildResponse_TooFewFields(t *testing.T) {
 
 func TestBuildResponse_StripTypesPrefix(t *testing.T) {
 	reg := newSchemaRegistry(nil)
-	_, resp := buildResponse(`200 {object} types.User "OK"`, reg)
+	_, resp := buildResponse(`200 {object} types.User "OK"`, "", reg)
 
 	content := resp.Content["application/json"].(map[string]interface{})
 	schema := content["schema"].(map[string]interface{})
@@ -864,12 +864,48 @@ func TestBuildResponse_StripTypesPrefix(t *testing.T) {
 
 func TestBuildResponse_NoDescription(t *testing.T) {
 	reg := newSchemaRegistry(nil)
-	status, resp := buildResponse(`204 {object} Empty`, reg)
+	status, resp := buildResponse(`204 {object} Empty`, "", reg)
 	if status != "204" {
 		t.Errorf("status = %q", status)
 	}
 	if resp.Description != "" {
 		t.Errorf("description should be empty, got %q", resp.Description)
+	}
+}
+
+func TestBuildResponse_ProduceCSV(t *testing.T) {
+	reg := newSchemaRegistry(nil)
+	_, resp := buildResponse(`200 {object} Data "OK"`, "text/csv", reg)
+
+	if _, ok := resp.Content["text/csv"]; !ok {
+		t.Errorf("expected text/csv content type, got keys: %v", resp.Content)
+	}
+	if _, ok := resp.Content["application/json"]; ok {
+		t.Error("should not have application/json when @Produce is text/csv")
+	}
+}
+
+func TestResolveContentType(t *testing.T) {
+	tests := []struct {
+		input, want string
+	}{
+		{"", "application/json"},
+		{"json", "application/json"},
+		{"application/json", "application/json"},
+		{"text/csv", "text/csv"},
+		{"csv", "text/csv"},
+		{"text/plain", "text/plain"},
+		{"plain", "text/plain"},
+		{"xml", "application/xml"},
+		{"text/html", "text/html"},
+		{"application/octet-stream", "application/octet-stream"},
+		{"custom/type", "custom/type"},
+	}
+	for _, tt := range tests {
+		got := resolveContentType(tt.input)
+		if got != tt.want {
+			t.Errorf("resolveContentType(%q) = %q, want %q", tt.input, got, tt.want)
+		}
 	}
 }
 

@@ -723,9 +723,37 @@ func buildRequestBody(params []parsedParam, reg *schemaRegistry) *RequestBody {
 	}
 }
 
+// resolveContentType maps a swaggo @Produce/@Accept value to an OpenAPI MIME type.
+// Falls back to application/json if empty or unrecognized.
+func resolveContentType(produce string) string {
+	switch strings.TrimSpace(strings.ToLower(produce)) {
+	case "json", "application/json", "":
+		return "application/json"
+	case "text/csv", "csv":
+		return "text/csv"
+	case "text/plain", "plain":
+		return "text/plain"
+	case "xml", "application/xml":
+		return "application/xml"
+	case "html", "text/html":
+		return "text/html"
+	case "multipart/form-data":
+		return "multipart/form-data"
+	case "application/octet-stream", "octet-stream":
+		return "application/octet-stream"
+	default:
+		// If it looks like a full MIME type, use as-is
+		if strings.Contains(produce, "/") {
+			return strings.TrimSpace(produce)
+		}
+		return "application/json"
+	}
+}
+
 // buildResponse parses a @Success or @Failure tag value and returns the
 // status code and Response. Registers any referenced schema types.
-func buildResponse(value string, reg *schemaRegistry) (string, Response) {
+// The produce parameter is the resolved content type from @Produce.
+func buildResponse(value string, produce string, reg *schemaRegistry) (string, Response) {
 	fields := strings.Fields(value)
 	if len(fields) < 3 {
 		return "", Response{}
@@ -738,16 +766,18 @@ func buildResponse(value string, reg *schemaRegistry) (string, Response) {
 		desc = strings.Trim(strings.Join(fields[3:], " "), "\"")
 	}
 
+	contentType := resolveContentType(produce)
+
 	content := map[string]interface{}{}
 	if refType != "" {
 		refName := reg.resolve(refType)
 		ref := map[string]interface{}{"$ref": "#/components/schemas/" + refName}
 		if openapiType == "{array}" {
-			content["application/json"] = map[string]interface{}{
+			content[contentType] = map[string]interface{}{
 				"schema": map[string]interface{}{"type": "array", "items": ref},
 			}
 		} else {
-			content["application/json"] = map[string]interface{}{"schema": ref}
+			content[contentType] = map[string]interface{}{"schema": ref}
 		}
 	}
 	return status, Response{Description: desc, Content: content}
@@ -776,14 +806,16 @@ func buildPathItem(tags tagSet, reg *schemaRegistry) PathItem {
 
 	requestBody := buildRequestBody(params, reg)
 
+	produce := tags.get("Produce")
+
 	responses := map[string]Response{}
 	for _, v := range tags.getAll("Success") {
-		if status, resp := buildResponse(v, reg); status != "" {
+		if status, resp := buildResponse(v, produce, reg); status != "" {
 			responses[status] = resp
 		}
 	}
 	for _, v := range tags.getAll("Failure") {
-		if status, resp := buildResponse(v, reg); status != "" {
+		if status, resp := buildResponse(v, produce, reg); status != "" {
 			responses[status] = resp
 		}
 	}
