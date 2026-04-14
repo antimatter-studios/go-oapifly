@@ -3,6 +3,7 @@ package oapifly
 import (
 	"go/parser"
 	"go/token"
+	"os"
 	"reflect"
 	"testing"
 )
@@ -1252,5 +1253,254 @@ func TestBuildPathItem_FullEndpoint(t *testing.T) {
 	}
 	if _, ok := reg.schemas["User"]; !ok {
 		t.Error("User schema should be registered")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// stripPackagePrefix
+// ---------------------------------------------------------------------------
+
+func TestStripPackagePrefix(t *testing.T) {
+	tests := []struct {
+		input, want string
+	}{
+		{"restclient.LoginRequest", "LoginRequest"},
+		{"types.User", "User"},
+		{"LoginRequest", "LoginRequest"},
+		{"deeply.nested.Type", "Type"},
+		{"", ""},
+	}
+	for _, tt := range tests {
+		got := stripPackagePrefix(tt.input)
+		if got != tt.want {
+			t.Errorf("stripPackagePrefix(%q) = %q, want %q", tt.input, got, tt.want)
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// AST-based schema generation
+// ---------------------------------------------------------------------------
+
+func TestGenerateSchemaForTypeAST(t *testing.T) {
+	// Write a temp Go file with a struct
+	dir := t.TempDir()
+	src := `package testpkg
+
+type LoginRequest struct {
+	Username string ` + "`json:\"username\"`" + `
+	Password string ` + "`json:\"password\"`" + `
+}
+`
+	path := dir + "/types.go"
+	if err := os.WriteFile(path, []byte(src), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	schema := generateSchemaForTypeAST("LoginRequest", path)
+	if schema == nil {
+		t.Fatal("expected non-nil schema")
+	}
+	if schema["type"] != "object" {
+		t.Errorf("type = %v", schema["type"])
+	}
+
+	props, ok := schema["properties"].(map[string]interface{})
+	if !ok {
+		t.Fatal("properties should be a map")
+	}
+	if _, ok := props["username"]; !ok {
+		t.Error("missing username property")
+	}
+	if _, ok := props["password"]; !ok {
+		t.Error("missing password property")
+	}
+
+	required, ok := schema["required"].([]string)
+	if !ok {
+		t.Fatal("required should be a string slice")
+	}
+	if len(required) != 2 {
+		t.Errorf("expected 2 required fields, got %d", len(required))
+	}
+}
+
+func TestGenerateSchemaForTypeAST_Omitempty(t *testing.T) {
+	dir := t.TempDir()
+	src := `package testpkg
+
+type Response struct {
+	Success bool   ` + "`json:\"success\"`" + `
+	Message string ` + "`json:\"message,omitempty\"`" + `
+	Name    string ` + "`json:\"name,omitempty\"`" + `
+}
+`
+	path := dir + "/types.go"
+	if err := os.WriteFile(path, []byte(src), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	schema := generateSchemaForTypeAST("Response", path)
+	if schema == nil {
+		t.Fatal("expected non-nil schema")
+	}
+
+	required := schema["required"].([]string)
+	if len(required) != 1 || required[0] != "success" {
+		t.Errorf("required = %v, want [success]", required)
+	}
+}
+
+func TestGenerateSchemaForTypeAST_SkipJsonDash(t *testing.T) {
+	dir := t.TempDir()
+	src := `package testpkg
+
+type Filtered struct {
+	Visible  string ` + "`json:\"visible\"`" + `
+	Internal string ` + "`json:\"-\"`" + `
+}
+`
+	path := dir + "/types.go"
+	if err := os.WriteFile(path, []byte(src), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	schema := generateSchemaForTypeAST("Filtered", path)
+	props := schema["properties"].(map[string]interface{})
+	if _, ok := props["visible"]; !ok {
+		t.Error("missing visible")
+	}
+	if _, ok := props["Internal"]; ok {
+		t.Error("Internal should be skipped (json:\"-\")")
+	}
+}
+
+func TestGenerateSchemaForTypeAST_FieldTypes(t *testing.T) {
+	dir := t.TempDir()
+	src := `package testpkg
+
+type AllTypes struct {
+	Name    string   ` + "`json:\"name\"`" + `
+	Age     int      ` + "`json:\"age\"`" + `
+	Active  bool     ` + "`json:\"active\"`" + `
+	Score   float64  ` + "`json:\"score\"`" + `
+	Tags    []string ` + "`json:\"tags\"`" + `
+	Ptr     *string  ` + "`json:\"ptr,omitempty\"`" + `
+}
+`
+	path := dir + "/types.go"
+	if err := os.WriteFile(path, []byte(src), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	schema := generateSchemaForTypeAST("AllTypes", path)
+	props := schema["properties"].(map[string]interface{})
+
+	nameSchema := props["name"].(map[string]interface{})
+	if nameSchema["type"] != "string" {
+		t.Errorf("name type = %v", nameSchema["type"])
+	}
+
+	ageSchema := props["age"].(map[string]interface{})
+	if ageSchema["type"] != "integer" {
+		t.Errorf("age type = %v", ageSchema["type"])
+	}
+
+	activeSchema := props["active"].(map[string]interface{})
+	if activeSchema["type"] != "boolean" {
+		t.Errorf("active type = %v", activeSchema["type"])
+	}
+
+	scoreSchema := props["score"].(map[string]interface{})
+	if scoreSchema["type"] != "number" {
+		t.Errorf("score type = %v", scoreSchema["type"])
+	}
+
+	tagsSchema := props["tags"].(map[string]interface{})
+	if tagsSchema["type"] != "array" {
+		t.Errorf("tags type = %v", tagsSchema["type"])
+	}
+
+	ptrSchema := props["ptr"].(map[string]interface{})
+	if ptrSchema["type"] != "string" {
+		t.Errorf("ptr type = %v (should deref pointer)", ptrSchema["type"])
+	}
+}
+
+func TestGenerateSchemaForTypeAST_NotFound(t *testing.T) {
+	dir := t.TempDir()
+	src := `package testpkg
+type Other struct {}
+`
+	path := dir + "/types.go"
+	if err := os.WriteFile(path, []byte(src), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	schema := generateSchemaForTypeAST("NonExistent", path)
+	if schema != nil {
+		t.Errorf("expected nil for non-existent type, got %v", schema)
+	}
+}
+
+func TestResolvePackagePrefixedType(t *testing.T) {
+	// Create a temp dir with a type file
+	dir := t.TempDir()
+	src := `package restclient
+
+type LoginRequest struct {
+	Username string ` + "`json:\"username\"`" + `
+	Password string ` + "`json:\"password\"`" + `
+}
+`
+	path := dir + "/auth_type.go"
+	if err := os.WriteFile(path, []byte(src), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	reg := newSchemaRegistry([]string{dir})
+	name := reg.resolve("restclient.LoginRequest")
+
+	if name != "restclient.LoginRequest" {
+		t.Errorf("name = %q, want restclient.LoginRequest", name)
+	}
+
+	schema, ok := reg.schemas["restclient.LoginRequest"]
+	if !ok {
+		t.Fatal("schema not registered")
+	}
+
+	props, ok := schema["properties"].(map[string]interface{})
+	if !ok {
+		t.Fatal("properties should be a map")
+	}
+	if _, ok := props["username"]; !ok {
+		t.Error("missing username property")
+	}
+	if _, ok := props["password"]; !ok {
+		t.Error("missing password property")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// extractTagValue
+// ---------------------------------------------------------------------------
+
+func TestExtractTagValue(t *testing.T) {
+	tests := []struct {
+		tag, key, want string
+	}{
+		{`json:"username"`, "json", "username"},
+		{`json:"name,omitempty"`, "json", "name,omitempty"},
+		{`json:"username" xml:"user"`, "json", "username"},
+		{`json:"username" xml:"user"`, "xml", "user"},
+		{`xml:"user"`, "json", ""},
+		{`json:"-"`, "json", "-"},
+	}
+	for _, tt := range tests {
+		got := extractTagValue(tt.tag, tt.key)
+		if got != tt.want {
+			t.Errorf("extractTagValue(%q, %q) = %q, want %q", tt.tag, tt.key, got, tt.want)
+		}
 	}
 }

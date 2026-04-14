@@ -99,10 +99,12 @@ func (g *Generator) Generate() map[string]interface{} {
 		schemaStructs := extractSchemaAnnotatedStructs(astFile)
 		for _, structName := range schemaStructs {
 			if _, ok := reg.schemas[structName]; !ok {
-				typeFile := findTypeFile(structName, reg.typeDirs)
+				shortName := stripPackagePrefix(structName)
+				typeFile := findTypeFile(shortName, reg.typeDirs)
 				if typeFile != "" {
-					if t := findReflectTypeByName(structName); t != nil {
-						reg.schemas[structName] = generateSchemaForTypeReflect(t)
+					schema := generateSchemaForTypeAST(shortName, typeFile)
+					if schema != nil {
+						reg.schemas[structName] = schema
 					} else {
 						reg.schemas[structName] = map[string]interface{}{"type": "object"}
 					}

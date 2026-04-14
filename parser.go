@@ -57,15 +57,28 @@ func newSchemaRegistry(typeDirs []string) *schemaRegistry {
 	}
 }
 
-// resolve strips "types." prefix, registers the schema if unknown, and returns
-// the clean reference name.
+// stripPackagePrefix returns the short type name by removing any package prefix.
+// e.g. "restclient.LoginRequest" → "LoginRequest", "LoginRequest" → "LoginRequest"
+func stripPackagePrefix(refType string) string {
+	if idx := strings.LastIndex(refType, "."); idx >= 0 {
+		return refType[idx+1:]
+	}
+	return refType
+}
+
+// resolve registers the schema if unknown and returns the reference name.
+// Handles package-qualified type names (e.g. "restclient.LoginRequest") by
+// stripping the package prefix for file/AST lookup while preserving the full
+// name as the schema key.
 func (r *schemaRegistry) resolve(refType string) string {
 	refName := strings.TrimPrefix(refType, "types.")
 	if _, ok := r.schemas[refName]; !ok {
-		typeFile := findTypeFile(refName, r.typeDirs)
+		shortName := stripPackagePrefix(refName)
+		typeFile := findTypeFile(shortName, r.typeDirs)
 		if typeFile != "" {
-			if t := findReflectTypeByName(refName); t != nil {
-				r.schemas[refName] = generateSchemaForTypeReflect(t)
+			schema := generateSchemaForTypeAST(shortName, typeFile)
+			if schema != nil {
+				r.schemas[refName] = schema
 			} else {
 				r.schemas[refName] = map[string]interface{}{"type": "object"}
 			}
@@ -319,6 +332,163 @@ func generateSchemaForTypeReflect(rt reflect.Type) map[string]interface{} {
 		"type":       "object",
 		"properties": props,
 		"required":   required,
+	}
+}
+
+// ---------------------------------------------------------------------------
+// AST-based schema generation
+// ---------------------------------------------------------------------------
+
+// generateSchemaForTypeAST parses a Go source file and generates an OpenAPI
+// schema for the named struct type using its AST. This replaces the broken
+// reflection-based approach since findReflectTypeByName cannot resolve
+// arbitrary types at runtime.
+func generateSchemaForTypeAST(typeName, filePath string) map[string]interface{} {
+	f, err := parseFile(filePath)
+	if err != nil {
+		return nil
+	}
+	for _, decl := range f.Decls {
+		genDecl, ok := decl.(*ast.GenDecl)
+		if !ok || genDecl.Tok != token.TYPE {
+			continue
+		}
+		for _, spec := range genDecl.Specs {
+			typeSpec, ok := spec.(*ast.TypeSpec)
+			if !ok || typeSpec.Name.Name != typeName {
+				continue
+			}
+			structType, ok := typeSpec.Type.(*ast.StructType)
+			if !ok {
+				continue
+			}
+			return buildSchemaFromStructAST(structType)
+		}
+	}
+	return nil
+}
+
+// buildSchemaFromStructAST builds an OpenAPI schema from an AST struct type.
+func buildSchemaFromStructAST(st *ast.StructType) map[string]interface{} {
+	props := map[string]interface{}{}
+	var required []string
+
+	for _, field := range st.Fields.List {
+		if len(field.Names) == 0 {
+			continue // skip embedded fields
+		}
+
+		jsonName, omitempty, skip := resolveJSONFieldNameAST(field)
+		if skip || jsonName == "" {
+			continue
+		}
+
+		schema := resolveFieldTypeAST(field.Type)
+		props[jsonName] = schema
+
+		if !omitempty {
+			required = append(required, jsonName)
+		}
+	}
+
+	result := map[string]interface{}{
+		"type":       "object",
+		"properties": props,
+	}
+	if len(required) > 0 {
+		result["required"] = required
+	}
+	return result
+}
+
+// resolveJSONFieldNameAST extracts JSON field name from an AST struct field's tag.
+func resolveJSONFieldNameAST(field *ast.Field) (name string, omitempty bool, skip bool) {
+	if len(field.Names) == 0 {
+		return "", false, true
+	}
+	name = field.Names[0].Name
+
+	if field.Tag == nil {
+		return name, false, false
+	}
+
+	// Tag value includes backticks, strip them
+	tagValue := strings.Trim(field.Tag.Value, "`")
+	jsonTag := extractTagValue(tagValue, "json")
+	if jsonTag == "" {
+		return name, false, false
+	}
+
+	parts := strings.Split(jsonTag, ",")
+	if parts[0] == "-" {
+		return "", false, true
+	}
+	if parts[0] != "" {
+		name = parts[0]
+	}
+	for _, part := range parts[1:] {
+		if part == "omitempty" {
+			omitempty = true
+			break
+		}
+	}
+	return name, omitempty, false
+}
+
+// extractTagValue extracts a specific key's value from a Go struct tag string.
+// e.g. extractTagValue(`json:"username" xml:"user"`, "json") → "username"
+func extractTagValue(tag, key string) string {
+	lookup := key + ":"
+	idx := strings.Index(tag, lookup)
+	if idx < 0 {
+		return ""
+	}
+	rest := tag[idx+len(lookup):]
+	if len(rest) == 0 || rest[0] != '"' {
+		return ""
+	}
+	rest = rest[1:]
+	end := strings.Index(rest, "\"")
+	if end < 0 {
+		return ""
+	}
+	return rest[:end]
+}
+
+// resolveFieldTypeAST maps an AST type expression to an OpenAPI schema map.
+func resolveFieldTypeAST(expr ast.Expr) map[string]interface{} {
+	switch t := expr.(type) {
+	case *ast.Ident:
+		return map[string]interface{}{"type": goIdentToOpenAPIType(t.Name)}
+	case *ast.StarExpr:
+		return resolveFieldTypeAST(t.X)
+	case *ast.ArrayType:
+		items := resolveFieldTypeAST(t.Elt)
+		return map[string]interface{}{"type": "array", "items": items}
+	case *ast.SelectorExpr:
+		// Package-qualified type like time.Time — treat as string
+		return map[string]interface{}{"type": "string"}
+	case *ast.MapType:
+		return map[string]interface{}{"type": "object"}
+	default:
+		return map[string]interface{}{"type": "object"}
+	}
+}
+
+// goIdentToOpenAPIType maps Go type identifiers to OpenAPI types.
+func goIdentToOpenAPIType(ident string) string {
+	switch ident {
+	case "string":
+		return "string"
+	case "bool":
+		return "boolean"
+	case "int", "int8", "int16", "int32", "int64",
+		"uint", "uint8", "uint16", "uint32", "uint64":
+		return "integer"
+	case "float32", "float64":
+		return "number"
+	default:
+		return "object"
 	}
 }
 
