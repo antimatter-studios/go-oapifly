@@ -111,7 +111,7 @@ func (g *Generator) Generate() map[string]interface{} {
 				shortName := stripPackagePrefix(structName)
 				typeFile := findTypeFile(shortName, reg.typeDirs)
 				if typeFile != "" {
-					schema := generateSchemaForTypeAST(shortName, typeFile)
+					schema := generateSchemaForTypeAST(shortName, typeFile, reg)
 					if schema != nil {
 						reg.schemas[structName] = schema
 					} else {
@@ -123,6 +123,11 @@ func (g *Generator) Generate() map[string]interface{} {
 			}
 		}
 	}
+
+	// Types the registry could not describe are reported to the caller rather than left in
+	// the spec as unexplained untyped objects, so a missing TypeDirs entry is visible at
+	// generation time instead of surfacing later as a contract test that cannot fail.
+	g.Warnings = append(g.Warnings, reg.warnings...)
 
 	info := map[string]string{"title": g.Config.Title, "version": g.Config.Version}
 	if g.Config.Description != "" {

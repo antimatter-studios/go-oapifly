@@ -1,6 +1,7 @@
 package oapifly
 
 import (
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -48,13 +49,27 @@ func (t tagSet) has(key string) bool {
 type schemaRegistry struct {
 	schemas  map[string]map[string]interface{}
 	typeDirs []string
+
+	// warnings records types that could not be resolved. A schema that says
+	// nothing about a field is honest; one that guesses is not, and without a
+	// warning the caller has no way to learn its spec is incomplete.
+	warnings []string
+
+	// resolving guards against a type that reaches itself - a tree node with
+	// child nodes of its own type would otherwise recurse until the stack ends.
+	resolving map[string]bool
 }
 
 func newSchemaRegistry(typeDirs []string) *schemaRegistry {
 	return &schemaRegistry{
-		schemas:  map[string]map[string]interface{}{},
-		typeDirs: typeDirs,
+		schemas:   map[string]map[string]interface{}{},
+		typeDirs:  typeDirs,
+		resolving: map[string]bool{},
 	}
+}
+
+func (r *schemaRegistry) warn(format string, args ...interface{}) {
+	r.warnings = append(r.warnings, fmt.Sprintf(format, args...))
 }
 
 // stripPackagePrefix returns the short type name by removing any package prefix.
@@ -76,7 +91,7 @@ func (r *schemaRegistry) resolve(refType string) string {
 		shortName := stripPackagePrefix(refName)
 		typeFile := findTypeFile(shortName, r.typeDirs)
 		if typeFile != "" {
-			schema := generateSchemaForTypeAST(shortName, typeFile)
+			schema := generateSchemaForTypeAST(shortName, typeFile, r)
 			if schema != nil {
 				r.schemas[refName] = schema
 			} else {
@@ -343,7 +358,7 @@ func generateSchemaForTypeReflect(rt reflect.Type) map[string]interface{} {
 // schema for the named struct type using its AST. This replaces the broken
 // reflection-based approach since findReflectTypeByName cannot resolve
 // arbitrary types at runtime.
-func generateSchemaForTypeAST(typeName, filePath string) map[string]interface{} {
+func generateSchemaForTypeAST(typeName, filePath string, reg *schemaRegistry) map[string]interface{} {
 	f, err := parseFile(filePath)
 	if err != nil {
 		return nil
@@ -362,14 +377,49 @@ func generateSchemaForTypeAST(typeName, filePath string) map[string]interface{} 
 			if !ok {
 				continue
 			}
-			return buildSchemaFromStructAST(structType)
+			return buildSchemaFromStructAST(structType, reg)
 		}
 	}
 	return nil
 }
 
+// schemaForNamedTypeAST resolves a named type declaration to a schema, reporting whether it
+// was a struct. Non-struct declarations matter as much as structs: `type DeviceType string`
+// and `type LogAction string` appear all over a response, and describing them as objects
+// would reject the plain strings the handlers actually send. isStruct tells the caller
+// whether the result deserves its own entry in components or should be inlined.
+func schemaForNamedTypeAST(typeName, filePath string, reg *schemaRegistry) (schema map[string]interface{}, isStruct bool) {
+	f, err := parseFile(filePath)
+	if err != nil {
+		return nil, false
+	}
+	for _, decl := range f.Decls {
+		genDecl, ok := decl.(*ast.GenDecl)
+		if !ok || genDecl.Tok != token.TYPE {
+			continue
+		}
+		for _, spec := range genDecl.Specs {
+			typeSpec, ok := spec.(*ast.TypeSpec)
+			if !ok || typeSpec.Name.Name != typeName {
+				continue
+			}
+			if structType, ok := typeSpec.Type.(*ast.StructType); ok {
+				return buildSchemaFromStructAST(structType, reg), true
+			}
+			// An interface constrains nothing that can be expressed here - the concrete
+			// value is chosen at runtime - so it stays an unconstrained schema rather than
+			// claiming a shape.
+			if _, ok := typeSpec.Type.(*ast.InterfaceType); ok {
+				return map[string]interface{}{}, false
+			}
+			return resolveFieldTypeAST(typeSpec.Type, reg), false
+		}
+	}
+	return nil, false
+}
+
 // buildSchemaFromStructAST builds an OpenAPI schema from an AST struct type.
-func buildSchemaFromStructAST(st *ast.StructType) map[string]interface{} {
+func buildSchemaFromStructAST(st *ast.StructType, reg *schemaRegistry) map[string]interface{} {
 	props := map[string]interface{}{}
 	var required []string
 
@@ -383,7 +433,7 @@ func buildSchemaFromStructAST(st *ast.StructType) map[string]interface{} {
 			continue
 		}
 
-		schema := resolveFieldTypeAST(field.Type)
+		schema := resolveFieldTypeAST(field.Type, reg)
 		props[jsonName] = schema
 
 		if !omitempty {
@@ -455,24 +505,119 @@ func extractTagValue(tag, key string) string {
 	return rest[:end]
 }
 
-// resolveFieldTypeAST maps an AST type expression to an OpenAPI schema map.
-func resolveFieldTypeAST(expr ast.Expr) map[string]interface{} {
+// qualifiedJSONTypes are the standard-library and well-known types whose JSON form is
+// not their Go structure. time.Time is a struct of unexported fields but marshals to an
+// RFC 3339 string; uuid.UUID is a byte array that marshals to a string. Describing them
+// structurally would be wrong, so each is named here with the schema it actually produces.
+//
+// Anything NOT in this table is resolved like any other named type, because the previous
+// blanket "package-qualified means string" rule silently described every foreign struct -
+// a CPU stats object, a slice of devices - as a string, and nothing in the generated spec
+// showed that a guess had been made.
+var qualifiedJSONTypes = map[string]map[string]interface{}{
+	"time.Time":       {"type": "string", "format": "date-time"},
+	"time.Duration":   {"type": "integer", "format": "int64"},
+	"uuid.UUID":       {"type": "string", "format": "uuid"},
+	"gorm.DeletedAt":  {"type": "string", "format": "date-time", "nullable": true},
+	"sql.NullString":  {"type": "string", "nullable": true},
+	"sql.NullTime":    {"type": "string", "format": "date-time", "nullable": true},
+	"sql.NullInt64":   {"type": "integer", "format": "int64", "nullable": true},
+	"sql.NullBool":    {"type": "boolean", "nullable": true},
+	"sql.NullFloat64": {"type": "number", "format": "double", "nullable": true},
+	// json.RawMessage is whatever the producer put in it, so the honest schema constrains
+	// nothing at all rather than claiming a type.
+	"json.RawMessage": {},
+}
+
+// resolveFieldTypeAST maps an AST type expression to an OpenAPI schema map. Named types
+// are resolved through reg so a nested struct becomes a real $ref instead of a bare
+// object - the reflection path has always emitted refs, and an AST path that did not was
+// the same generator producing two different specs for the same input.
+func resolveFieldTypeAST(expr ast.Expr, reg *schemaRegistry) map[string]interface{} {
 	switch t := expr.(type) {
 	case *ast.Ident:
-		return map[string]interface{}{"type": goIdentToOpenAPIType(t.Name)}
+		if primitive := goIdentToOpenAPIType(t.Name); primitive != "object" {
+			return map[string]interface{}{"type": primitive}
+		}
+		// A non-primitive identifier is a type declared in this package.
+		return reg.refOrObject(t.Name, t.Name)
 	case *ast.StarExpr:
-		return resolveFieldTypeAST(t.X)
+		// A pointer is the same type, absent-able: OpenAPI 3.0 spells that nullable.
+		inner := resolveFieldTypeAST(t.X, reg)
+		if len(inner) > 0 {
+			inner["nullable"] = true
+		}
+		return inner
 	case *ast.ArrayType:
-		items := resolveFieldTypeAST(t.Elt)
+		items := resolveFieldTypeAST(t.Elt, reg)
 		return map[string]interface{}{"type": "array", "items": items}
 	case *ast.SelectorExpr:
-		// Package-qualified type like time.Time — treat as string
-		return map[string]interface{}{"type": "string"}
+		pkg, ok := t.X.(*ast.Ident)
+		if !ok {
+			return map[string]interface{}{"type": "object"}
+		}
+		qualified := pkg.Name + "." + t.Sel.Name
+		if known, ok := qualifiedJSONTypes[qualified]; ok {
+			return copySchema(known)
+		}
+		return reg.refOrObject(t.Sel.Name, qualified)
 	case *ast.MapType:
 		return map[string]interface{}{"type": "object"}
 	default:
 		return map[string]interface{}{"type": "object"}
 	}
+}
+
+// copySchema returns a copy so a caller adding nullable to a pointer field cannot mutate
+// the shared entry in qualifiedJSONTypes and change every other field of that type.
+func copySchema(src map[string]interface{}) map[string]interface{} {
+	out := make(map[string]interface{}, len(src))
+	for k, v := range src {
+		out[k] = v
+	}
+	return out
+}
+
+// refOrObject registers typeName if it can be found in the configured TypeDirs and
+// returns a $ref to it. When it cannot be found the schema falls back to a plain object
+// and the failure is recorded: an unconstrained object accepts whatever the handler
+// returns, so the spec stays usable, and the warning says which type is missing and which
+// directory would have to be scanned to describe it.
+func (r *schemaRegistry) refOrObject(typeName, displayName string) map[string]interface{} {
+	if r.resolving[typeName] {
+		// Already being built further up the stack; the ref is still correct.
+		return map[string]interface{}{"$ref": "#/components/schemas/" + typeName}
+	}
+
+	if _, known := r.schemas[typeName]; known {
+		return map[string]interface{}{"$ref": "#/components/schemas/" + typeName}
+	}
+
+	typeFile := findTypeFile(typeName, r.typeDirs)
+	if typeFile == "" {
+		r.warn("type %s is not in any configured TypeDirs, described as an untyped object", displayName)
+		return map[string]interface{}{"type": "object"}
+	}
+
+	r.resolving[typeName] = true
+	schema, isStruct := schemaForNamedTypeAST(typeName, typeFile, r)
+	delete(r.resolving, typeName)
+
+	if schema == nil {
+		r.warn("type %s in %s has no schema this generator can express, described as an untyped object", displayName, typeFile)
+		return map[string]interface{}{"type": "object"}
+	}
+
+	// Only a struct earns a named entry in components. A declaration like
+	// `type DeviceType string` is a string everywhere it appears, so it is inlined -
+	// registering it as an object would describe a plain string as an object, which is the
+	// same class of lie this change exists to remove.
+	if !isStruct {
+		return schema
+	}
+
+	r.schemas[typeName] = schema
+	return map[string]interface{}{"$ref": "#/components/schemas/" + typeName}
 }
 
 // goIdentToOpenAPIType maps Go type identifiers to OpenAPI types.
