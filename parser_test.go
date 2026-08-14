@@ -1333,7 +1333,7 @@ type LoginRequest struct {
 		t.Fatal(err)
 	}
 
-	schema := generateSchemaForTypeAST("LoginRequest", path)
+	schema := generateSchemaForTypeAST("LoginRequest", path, newSchemaRegistry([]string{dir}))
 	if schema == nil {
 		t.Fatal("expected non-nil schema")
 	}
@@ -1376,7 +1376,7 @@ type Response struct {
 		t.Fatal(err)
 	}
 
-	schema := generateSchemaForTypeAST("Response", path)
+	schema := generateSchemaForTypeAST("Response", path, newSchemaRegistry([]string{dir}))
 	if schema == nil {
 		t.Fatal("expected non-nil schema")
 	}
@@ -1401,7 +1401,7 @@ type Filtered struct {
 		t.Fatal(err)
 	}
 
-	schema := generateSchemaForTypeAST("Filtered", path)
+	schema := generateSchemaForTypeAST("Filtered", path, newSchemaRegistry([]string{dir}))
 	props := schema["properties"].(map[string]interface{})
 	if _, ok := props["visible"]; !ok {
 		t.Error("missing visible")
@@ -1429,7 +1429,7 @@ type AllTypes struct {
 		t.Fatal(err)
 	}
 
-	schema := generateSchemaForTypeAST("AllTypes", path)
+	schema := generateSchemaForTypeAST("AllTypes", path, newSchemaRegistry([]string{dir}))
 	props := schema["properties"].(map[string]interface{})
 
 	nameSchema := props["name"].(map[string]interface{})
@@ -1473,7 +1473,7 @@ type Other struct {}
 		t.Fatal(err)
 	}
 
-	schema := generateSchemaForTypeAST("NonExistent", path)
+	schema := generateSchemaForTypeAST("NonExistent", path, newSchemaRegistry([]string{dir}))
 	if schema != nil {
 		t.Errorf("expected nil for non-existent type, got %v", schema)
 	}
