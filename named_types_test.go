@@ -309,6 +309,11 @@ type Entry struct {
 	if data["nullable"] != true {
 		t.Errorf("wrapped ref should be nullable, got %#v", data)
 	}
+	// OpenAPI 3.0 applies nullable only to a type declared in the same object, so the
+	// wrapper without a local type would be as inert as the sibling keyword it replaced.
+	if data["type"] != "object" {
+		t.Errorf("nullable wrapper needs a local type for nullable to mean anything, got %#v", data)
+	}
 	allOf, ok := data["allOf"].([]interface{})
 	if !ok || len(allOf) != 1 {
 		t.Fatalf("expected a single-entry allOf, got %#v", data)

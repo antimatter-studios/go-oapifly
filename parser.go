@@ -579,9 +579,15 @@ func asNullable(schema map[string]interface{}) map[string]interface{} {
 	}
 
 	if ref, ok := schema["$ref"]; ok {
+		// type is stated in the same object on purpose. OpenAPI 3.0 defines nullable as
+		// adding null to the type declared alongside it, and only when a type is declared
+		// there - so allOf plus nullable on its own is as inert as the sibling keyword it
+		// replaced. A reference is only ever registered for a struct, so object is accurate,
+		// and allOf keeps the referenced shape rather than duplicating it inline.
 		return map[string]interface{}{
-			"allOf":    []interface{}{map[string]interface{}{"$ref": ref}},
+			"type":     "object",
 			"nullable": true,
+			"allOf":    []interface{}{map[string]interface{}{"$ref": ref}},
 		}
 	}
 
