@@ -543,11 +543,7 @@ func resolveFieldTypeAST(expr ast.Expr, reg *schemaRegistry) map[string]interfac
 		return reg.refOrObject(t.Name, t.Name)
 	case *ast.StarExpr:
 		// A pointer is the same type, absent-able: OpenAPI 3.0 spells that nullable.
-		inner := resolveFieldTypeAST(t.X, reg)
-		if len(inner) > 0 {
-			inner["nullable"] = true
-		}
-		return inner
+		return asNullable(resolveFieldTypeAST(t.X, reg))
 	case *ast.ArrayType:
 		items := resolveFieldTypeAST(t.Elt, reg)
 		return map[string]interface{}{"type": "array", "items": items}
@@ -566,6 +562,37 @@ func resolveFieldTypeAST(expr ast.Expr, reg *schemaRegistry) map[string]interfac
 	default:
 		return map[string]interface{}{"type": "object"}
 	}
+}
+
+// asNullable marks a schema as permitting null.
+//
+// A reference needs different treatment from an inline schema. In OpenAPI 3.0 and in JSON
+// Schema, any keyword sitting beside $ref is ignored, so `{"$ref": x, "nullable": true}`
+// describes a field as non-nullable however it is read - and a consumer validating a nil
+// pointer, which serialises to null, rejects a body the API legitimately returns. Wrapping
+// the reference in allOf gives the keyword something to apply to, which is the spelling the
+// OpenAPI 3.0 specification recommends for exactly this case.
+func asNullable(schema map[string]interface{}) map[string]interface{} {
+	if len(schema) == 0 {
+		// An unconstrained schema already permits null; saying so would narrow nothing.
+		return schema
+	}
+
+	if ref, ok := schema["$ref"]; ok {
+		// type is stated in the same object on purpose. OpenAPI 3.0 defines nullable as
+		// adding null to the type declared alongside it, and only when a type is declared
+		// there - so allOf plus nullable on its own is as inert as the sibling keyword it
+		// replaced. A reference is only ever registered for a struct, so object is accurate,
+		// and allOf keeps the referenced shape rather than duplicating it inline.
+		return map[string]interface{}{
+			"type":     "object",
+			"nullable": true,
+			"allOf":    []interface{}{map[string]interface{}{"$ref": ref}},
+		}
+	}
+
+	schema["nullable"] = true
+	return schema
 }
 
 // copySchema returns a copy so a caller adding nullable to a pointer field cannot mutate
