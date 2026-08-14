@@ -282,3 +282,58 @@ type Node struct {
 		t.Fatal("self-referencing type did not terminate")
 	}
 }
+
+// A pointer to a struct serialises to null when nil, and a nullable reference cannot be
+// expressed by adding the keyword beside $ref - it is ignored there, by OpenAPI readers and
+// JSON Schema validators alike. It has to be wrapped so the keyword applies to something.
+func TestNullablePointerToStructWrapsTheRef(t *testing.T) {
+	dir := t.TempDir()
+	path := writeGoFile(t, dir, "entry.go", `package log
+
+type Payload struct {
+	Kind string `+"`json:\"kind\"`"+`
+}
+
+type Entry struct {
+	Data *Payload `+"`json:\"data\"`"+`
+}
+`)
+
+	reg := newSchemaRegistry([]string{dir})
+	schema := generateSchemaForTypeAST("Entry", path, reg)
+
+	data := propOf(t, schema, "data")
+	if _, bare := data["$ref"]; bare {
+		t.Fatal("a nullable ref must not be a bare $ref with a sibling keyword, which is ignored")
+	}
+	if data["nullable"] != true {
+		t.Errorf("wrapped ref should be nullable, got %#v", data)
+	}
+	allOf, ok := data["allOf"].([]interface{})
+	if !ok || len(allOf) != 1 {
+		t.Fatalf("expected a single-entry allOf, got %#v", data)
+	}
+	first, _ := allOf[0].(map[string]interface{})
+	if got, _ := first["$ref"].(string); got != "#/components/schemas/Payload" {
+		t.Errorf("allOf should reference Payload, got %#v", allOf[0])
+	}
+}
+
+// An unconstrained schema already accepts null, so it is left exactly as it is rather than
+// gaining a keyword that narrows nothing.
+func TestNullablePointerToUnconstrainedStaysEmpty(t *testing.T) {
+	dir := t.TempDir()
+	path := writeGoFile(t, dir, "raw.go", `package log
+
+type Holder struct {
+	Blob *json.RawMessage `+"`json:\"blob\"`"+`
+}
+`)
+
+	reg := newSchemaRegistry([]string{dir})
+	schema := generateSchemaForTypeAST("Holder", path, reg)
+
+	if blob := propOf(t, schema, "blob"); len(blob) != 0 {
+		t.Errorf("pointer to raw JSON should stay unconstrained, got %#v", blob)
+	}
+}
