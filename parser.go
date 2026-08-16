@@ -1,6 +1,7 @@
 package oapifly
 
 import (
+	"encoding/json"
 	"fmt"
 	"go/ast"
 	"go/parser"
@@ -1047,6 +1048,117 @@ func buildResponse(value string, produce string, reg *schemaRegistry) (string, R
 	return status, Response{Description: desc, Content: content}
 }
 
+// ---------------------------------------------------------------------------
+// @Example parsing
+// ---------------------------------------------------------------------------
+
+// parsedExample is one @Example annotation:
+//
+//	@Example accepted request  {"username": "gooduser"}  "A user that exists"
+//	@Example accepted response 200 {"token": "abc"}
+//
+// The name is what ties a request to the response it produces. A consumer reading the
+// document pairs them by that name, so a name used on one side and not the other pairs with
+// everything on the other side - which is why both sides are declared together.
+type parsedExample struct {
+	Name    string
+	Side    string // "request" or "response"
+	Status  string // response only
+	Summary string
+	Value   interface{}
+}
+
+// parseExample reads one @Example tag value, reporting whether it was well formed.
+func parseExample(value string) (parsedExample, bool) {
+	fields := strings.Fields(value)
+	if len(fields) < 3 {
+		return parsedExample{}, false
+	}
+
+	example := parsedExample{Name: fields[0], Side: strings.ToLower(fields[1])}
+	rest := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(value), fields[0]))
+	rest = strings.TrimSpace(strings.TrimPrefix(rest, fields[1]))
+
+	switch example.Side {
+	case "request":
+	case "response":
+		if len(fields) < 4 {
+			return parsedExample{}, false
+		}
+		example.Status = fields[2]
+		rest = strings.TrimSpace(strings.TrimPrefix(rest, fields[2]))
+	default:
+		return parsedExample{}, false
+	}
+
+	body, summary := splitExampleSummary(rest)
+	example.Summary = summary
+	example.Value = decodeExampleValue(body)
+	return example, true
+}
+
+// splitExampleSummary separates the value from an optional quoted summary after it. The
+// value is JSON often enough that a quote inside it cannot be assumed to open the summary,
+// so only a quoted run at the very end counts.
+func splitExampleSummary(rest string) (body, summary string) {
+	rest = strings.TrimSpace(rest)
+	if !strings.HasSuffix(rest, `"`) {
+		return rest, ""
+	}
+	opening := strings.LastIndex(rest[:len(rest)-1], `"`)
+	if opening <= 0 {
+		return rest, ""
+	}
+	return strings.TrimSpace(rest[:opening]), rest[opening+1 : len(rest)-1]
+}
+
+// decodeExampleValue reads the value as JSON, keeping the structure a consumer needs to send
+// it as a body. Text that is not JSON is the value itself - a plain string example is legal.
+func decodeExampleValue(body string) interface{} {
+	var decoded interface{}
+	if err := json.Unmarshal([]byte(body), &decoded); err == nil {
+		return decoded
+	}
+	return body
+}
+
+// attachExamples files each parsed example under the media type it belongs to. Content is
+// built before this runs, so an example for a status with no declared response, or for an
+// operation with no body, is dropped rather than inventing content to hold it.
+func attachExamples(examples []parsedExample, requestBody *RequestBody, responses map[string]Response) {
+	for _, example := range examples {
+		switch example.Side {
+		case "request":
+			if requestBody != nil {
+				addExample(requestBody.Content, example)
+			}
+		case "response":
+			if response, ok := responses[example.Status]; ok {
+				addExample(response.Content, example)
+			}
+		}
+	}
+}
+
+// addExample puts one example into every media type of a content map. An operation declares
+// a single media type in practice, and spreading it is better than guessing which one was
+// meant.
+func addExample(content map[string]interface{}, example parsedExample) {
+	for mediaType, raw := range content {
+		media, ok := raw.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		existing, ok := media["examples"].(map[string]Example)
+		if !ok {
+			existing = map[string]Example{}
+			media["examples"] = existing
+		}
+		existing[example.Name] = Example{Summary: example.Summary, Value: example.Value}
+		content[mediaType] = media
+	}
+}
+
 // buildPathItem parses swaggo tags and builds a PathItem with schema references.
 func buildPathItem(tags tagSet, reg *schemaRegistry) PathItem {
 	var tagsList []string
@@ -1083,6 +1195,14 @@ func buildPathItem(tags tagSet, reg *schemaRegistry) PathItem {
 			responses[status] = resp
 		}
 	}
+
+	var examples []parsedExample
+	for _, v := range tags.getAll("Example") {
+		if example, ok := parseExample(v); ok {
+			examples = append(examples, example)
+		}
+	}
+	attachExamples(examples, requestBody, responses)
 
 	return PathItem{
 		Summary:     tags.get("Summary"),

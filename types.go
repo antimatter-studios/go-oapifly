@@ -37,6 +37,15 @@ type RequestBody struct {
 	Content     map[string]interface{} `json:"content,omitempty" yaml:"content,omitempty"`
 }
 
+// Example is a single named entry of an Examples Object. One operation can describe several
+// exchanges - a request that is accepted beside one that is rejected - rather than a single
+// specimen body, and a consumer pairs a request with its response by the name they share.
+type Example struct {
+	Summary     string      `json:"summary,omitempty" yaml:"summary,omitempty"`
+	Description string      `json:"description,omitempty" yaml:"description,omitempty"`
+	Value       interface{} `json:"value" yaml:"value"`
+}
+
 // Response represents an OpenAPI response.
 type Response struct {
 	Description string                 `json:"description" yaml:"description"`
