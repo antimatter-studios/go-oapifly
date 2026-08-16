@@ -1118,7 +1118,7 @@ func TestBuildPathItem_Basic(t *testing.T) {
 	tags.add("Router", "/api/items [GET]")
 
 	reg := newSchemaRegistry(nil)
-	item := buildPathItem(tags, reg)
+	item := buildPathItem("/api/items", tags, reg)
 
 	if item.Summary != "List items" {
 		t.Errorf("Summary = %q", item.Summary)
@@ -1137,7 +1137,7 @@ func TestBuildPathItem_TagsWhitespaceTrimming(t *testing.T) {
 	tags.add("Router", "/api/test [GET]")
 
 	reg := newSchemaRegistry(nil)
-	item := buildPathItem(tags, reg)
+	item := buildPathItem("/api/test", tags, reg)
 
 	if len(item.Tags) != 3 {
 		t.Fatalf("expected 3 tags, got %d", len(item.Tags))
@@ -1154,7 +1154,7 @@ func TestBuildPathItem_NoTags(t *testing.T) {
 	tags.add("Router", "/api/items [GET]")
 
 	reg := newSchemaRegistry(nil)
-	item := buildPathItem(tags, reg)
+	item := buildPathItem("/api/items", tags, reg)
 
 	if item.Tags != nil {
 		t.Errorf("Tags should be nil when no Tags annotation, got %v", item.Tags)
@@ -1168,7 +1168,7 @@ func TestBuildPathItem_Deprecated(t *testing.T) {
 	tags.add("Router", "/api/old [GET]")
 
 	reg := newSchemaRegistry(nil)
-	item := buildPathItem(tags, reg)
+	item := buildPathItem("/api/old", tags, reg)
 
 	if !item.Deprecated {
 		t.Error("should be deprecated")
@@ -1181,7 +1181,7 @@ func TestBuildPathItem_OperationID(t *testing.T) {
 	tags.add("Router", "/api/users [GET]")
 
 	reg := newSchemaRegistry(nil)
-	item := buildPathItem(tags, reg)
+	item := buildPathItem("/api/users", tags, reg)
 
 	if item.OperationID != "listUsers" {
 		t.Errorf("OperationID = %q", item.OperationID)
@@ -1195,7 +1195,7 @@ func TestBuildPathItem_WithQueryParams(t *testing.T) {
 	tags.add("Param", `limit query int false "Page size"`)
 
 	reg := newSchemaRegistry(nil)
-	item := buildPathItem(tags, reg)
+	item := buildPathItem("/api/users", tags, reg)
 
 	if len(item.Parameters) != 2 {
 		t.Fatalf("expected 2 params, got %d", len(item.Parameters))
@@ -1214,7 +1214,7 @@ func TestBuildPathItem_WithBodyParam(t *testing.T) {
 	tags.add("Param", `user body User true "User data"`)
 
 	reg := newSchemaRegistry(nil)
-	item := buildPathItem(tags, reg)
+	item := buildPathItem("/api/users", tags, reg)
 
 	if item.RequestBody == nil {
 		t.Fatal("RequestBody should not be nil")
@@ -1234,7 +1234,7 @@ func TestBuildPathItem_MultipleResponses(t *testing.T) {
 	tags.add("Failure", `500 {object} Error "Server error"`)
 
 	reg := newSchemaRegistry(nil)
-	item := buildPathItem(tags, reg)
+	item := buildPathItem("/api/items", tags, reg)
 
 	if _, ok := item.Responses["200"]; !ok {
 		t.Error("missing 200 response")
@@ -1251,7 +1251,7 @@ func TestBuildPathItem_MultipleSuccessCodes(t *testing.T) {
 	tags.add("Success", `201 {object} Item "Created"`)
 
 	reg := newSchemaRegistry(nil)
-	item := buildPathItem(tags, reg)
+	item := buildPathItem("/api/items", tags, reg)
 
 	if len(item.Responses) != 2 {
 		t.Errorf("expected 2 responses, got %d", len(item.Responses))
@@ -1273,7 +1273,7 @@ func TestBuildPathItem_FullEndpoint(t *testing.T) {
 	tags.add("Router", "/api/users [POST]")
 
 	reg := newSchemaRegistry(nil)
-	item := buildPathItem(tags, reg)
+	item := buildPathItem("/api/users", tags, reg)
 
 	if item.Summary != "Create user" {
 		t.Errorf("Summary = %q", item.Summary)

@@ -22,7 +22,7 @@ func exampleTags(lines ...string) tagSet {
 
 func TestNamedExamplesOnRequestAndResponse(t *testing.T) {
 	reg := newSchemaRegistry(nil)
-	item := buildPathItem(exampleTags(
+	item := buildPathItem("/x", exampleTags(
 		`Router /login [post]`,
 		`Param credentials body object true "Credentials"`,
 		`Success 200 {object} object`,
@@ -59,7 +59,7 @@ func TestNamedExamplesOnRequestAndResponse(t *testing.T) {
 
 func TestExampleValueIsParsedAsJSON(t *testing.T) {
 	reg := newSchemaRegistry(nil)
-	item := buildPathItem(exampleTags(
+	item := buildPathItem("/x", exampleTags(
 		`Router /login [post]`,
 		`Param credentials body object true "Credentials"`,
 		`Success 200 {object} object`,
@@ -81,7 +81,7 @@ func TestExampleValueIsParsedAsJSON(t *testing.T) {
 
 func TestExampleValueThatIsNotJSONStaysAString(t *testing.T) {
 	reg := newSchemaRegistry(nil)
-	item := buildPathItem(exampleTags(
+	item := buildPathItem("/x", exampleTags(
 		`Router /thing [post]`,
 		`Param body body object true "Body"`,
 		`Success 200 {object} object`,
@@ -96,7 +96,7 @@ func TestExampleValueThatIsNotJSONStaysAString(t *testing.T) {
 
 func TestExampleSummaryIsOptional(t *testing.T) {
 	reg := newSchemaRegistry(nil)
-	item := buildPathItem(exampleTags(
+	item := buildPathItem("/x", exampleTags(
 		`Router /login [post]`,
 		`Param credentials body object true "Credentials"`,
 		`Success 200 {object} object`,
@@ -115,7 +115,7 @@ func TestExampleSummaryIsOptional(t *testing.T) {
 
 func TestOperationWithoutExamplesIsUnchanged(t *testing.T) {
 	reg := newSchemaRegistry(nil)
-	item := buildPathItem(exampleTags(
+	item := buildPathItem("/x", exampleTags(
 		`Router /thing [get]`,
 		`Success 200 {object} object`,
 	), reg)
@@ -129,7 +129,7 @@ func TestOperationWithoutExamplesIsUnchanged(t *testing.T) {
 
 func TestExamplesSurviveIntoTheDocument(t *testing.T) {
 	reg := newSchemaRegistry(nil)
-	item := buildPathItem(exampleTags(
+	item := buildPathItem("/x", exampleTags(
 		`Router /login [post]`,
 		`Param credentials body object true "Credentials"`,
 		`Success 200 {object} object`,

@@ -1182,7 +1182,7 @@ func addExample(content map[string]interface{}, example parsedExample) {
 }
 
 // buildPathItem parses swaggo tags and builds a PathItem with schema references.
-func buildPathItem(tags tagSet, reg *schemaRegistry) PathItem {
+func buildPathItem(routerPath string, tags tagSet, reg *schemaRegistry) PathItem {
 	var tagsList []string
 	if v := tags.get("Tags"); v != "" {
 		parts := strings.Split(v, ",")
@@ -1195,11 +1195,8 @@ func buildPathItem(tags tagSet, reg *schemaRegistry) PathItem {
 	params := parseAllParams(tags.getAll("Param"))
 
 	var parameters []Parameter
-	if routerTag := tags.get("Router"); routerTag != "" {
-		fields := strings.Fields(routerTag)
-		if len(fields) == 2 {
-			parameters = buildParameters(fields[0], params)
-		}
+	if routerPath != "" {
+		parameters = buildParameters(routerPath, params)
 	}
 
 	requestBody := buildRequestBody(params, reg)
