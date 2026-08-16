@@ -8,6 +8,7 @@ import (
 	"go/token"
 	"os"
 	"reflect"
+	"strconv"
 	"strings"
 )
 
@@ -522,6 +523,7 @@ func buildSchemaFromStructAST(st *ast.StructType, reg *schemaRegistry) map[strin
 		}
 
 		schema := resolveFieldTypeAST(field.Type, reg)
+		applyFieldConstraints(schema, field)
 		props[jsonName] = schema
 
 		if !omitempty {
@@ -571,6 +573,62 @@ func resolveJSONFieldNameAST(field *ast.Field) (name string, omitempty bool, ski
 		}
 	}
 	return name, omitempty, false
+}
+
+// applyFieldConstraints reads the constraint tags swaggo defines - enums, format, example -
+// off a struct field and puts them in its schema.
+//
+// A Go type says what shape a value has, not which values are allowed. Without these, a
+// schema describes `type: string` where the handler accepts two words, so a document
+// permits bodies the handler goes on to reject and a consumer generating a request from
+// the description gets a 400 it cannot explain.
+//
+// The values are typed against the schema they are joining: `enums:"1,2,3"` on an integer
+// field has to produce numbers, because quoting them would describe a field that rejects
+// every value it actually accepts.
+func applyFieldConstraints(schema map[string]interface{}, field *ast.Field) {
+	if field.Tag == nil {
+		return
+	}
+	tag := strings.Trim(field.Tag.Value, "`")
+
+	if raw := extractTagValue(tag, "enums"); raw != "" {
+		var values []interface{}
+		for _, part := range strings.Split(raw, ",") {
+			values = append(values, typedTagValue(strings.TrimSpace(part), schema))
+		}
+		if len(values) > 0 {
+			schema["enum"] = values
+		}
+	}
+
+	// A format that comes with the type - date-time for time.Time, uuid for uuid.UUID -
+	// describes what Go actually marshals, so it wins over a tag saying otherwise.
+	if raw := extractTagValue(tag, "format"); raw != "" {
+		if _, already := schema["format"]; !already {
+			schema["format"] = raw
+		}
+	}
+
+	if raw := extractTagValue(tag, "example"); raw != "" {
+		schema["example"] = typedTagValue(raw, schema)
+	}
+}
+
+// typedTagValue reads a tag's text as the type the schema declares. Tag values are always
+// written as text, so an integer field's "3" has to become a number on the way in.
+func typedTagValue(raw string, schema map[string]interface{}) interface{} {
+	switch schema["type"] {
+	case "integer", "number":
+		if n, err := strconv.ParseFloat(raw, 64); err == nil {
+			return n
+		}
+	case "boolean":
+		if b, err := strconv.ParseBool(raw); err == nil {
+			return b
+		}
+	}
+	return raw
 }
 
 // extractTagValue extracts a specific key's value from a Go struct tag string.
