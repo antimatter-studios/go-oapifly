@@ -837,6 +837,28 @@ func parseRouterTag(router string) (string, string) {
 	return fields[0], strings.ToLower(strings.Trim(fields[1], "[]"))
 }
 
+// pathItemMethods are the only keys a Path Item Object may carry an operation under.
+var pathItemMethods = []string{"get", "put", "post", "delete", "options", "head", "patch", "trace"}
+
+// methodsFor turns the verb from a @Router tag into the methods it describes.
+//
+// A route can be registered for every method at once - fiber's App.All, gin's router.Any,
+// echo's Any - and `any` is the name those frameworks give it. OpenAPI has no such key, so
+// it is written out as the methods it stands for. Anything else is a verb OpenAPI cannot
+// express (CONNECT) or a typo, and the caller drops the route rather than emit a key no
+// consumer will read.
+func methodsFor(method string) ([]string, bool) {
+	if method == "any" {
+		return pathItemMethods, true
+	}
+	for _, known := range pathItemMethods {
+		if method == known {
+			return []string{method}, true
+		}
+	}
+	return nil, false
+}
+
 // ---------------------------------------------------------------------------
 // OpenAPI building
 // ---------------------------------------------------------------------------
