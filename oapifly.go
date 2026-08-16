@@ -96,36 +96,41 @@ func (g *Generator) Generate() map[string]interface{} {
 		}
 		handlers := extractHandlerDocs(astFile)
 		for _, tags := range handlers {
-			path, method := parseRouterTag(tags.get("Router"))
-			if path == "" || method == "" {
-				continue
-			}
-			methods, usable := methodsFor(method)
-			if !usable {
-				g.Warnings = append(g.Warnings, fmt.Sprintf("%s %s: '%s' is not a method a Path Item Object may carry, route not described", strings.ToUpper(method), path, method))
-				continue
-			}
-			if _, ok := paths[path]; !ok {
-				paths[path] = map[string]PathItem{}
-				describedMethods[path] = map[string]bool{}
-			}
-			item := buildPathItem(tags, reg)
-			// A catch-all fills in the methods nothing else describes. A method described on
-			// its own terms says more than "this route answers everything", so it wins wherever
-			// the two meet, in whichever order the two handlers were read.
-			catchAll := len(methods) > 1
-			for _, m := range methods {
-				if catchAll {
-					if describedMethods[path][m] {
-						continue
-					}
-				} else {
-					if describedMethods[path][m] {
-						g.Warnings = append(g.Warnings, fmt.Sprintf("duplicate handler for %s %s, overwriting previous", strings.ToUpper(m), path))
-					}
-					describedMethods[path][m] = true
+			// One handler can serve several routes, and swaggo says so by repeating
+			// @Router. Each line is described in its own right: the path parameters come
+			// from the route, so two routes cannot share one parameter list.
+			for _, routerTag := range tags.getAll("Router") {
+				path, method := parseRouterTag(routerTag)
+				if path == "" || method == "" {
+					continue
 				}
-				paths[path][m] = item
+				methods, usable := methodsFor(method)
+				if !usable {
+					g.Warnings = append(g.Warnings, fmt.Sprintf("%s %s: '%s' is not a method a Path Item Object may carry, route not described", strings.ToUpper(method), path, method))
+					continue
+				}
+				if _, ok := paths[path]; !ok {
+					paths[path] = map[string]PathItem{}
+					describedMethods[path] = map[string]bool{}
+				}
+				item := buildPathItem(path, tags, reg)
+				// A catch-all fills in the methods nothing else describes. A method described on
+				// its own terms says more than "this route answers everything", so it wins wherever
+				// the two meet, in whichever order the two handlers were read.
+				catchAll := len(methods) > 1
+				for _, m := range methods {
+					if catchAll {
+						if describedMethods[path][m] {
+							continue
+						}
+					} else {
+						if describedMethods[path][m] {
+							g.Warnings = append(g.Warnings, fmt.Sprintf("duplicate handler for %s %s, overwriting previous", strings.ToUpper(m), path))
+						}
+						describedMethods[path][m] = true
+					}
+					paths[path][m] = item
+				}
 			}
 		}
 		// A struct carrying a @Schema annotation is registered the same way a type named by
