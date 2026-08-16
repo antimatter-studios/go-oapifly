@@ -87,21 +87,48 @@ func stripPackagePrefix(refType string) string {
 // name as the schema key.
 func (r *schemaRegistry) resolve(refType string) string {
 	refName := strings.TrimPrefix(refType, "types.")
-	if _, ok := r.schemas[refName]; !ok {
-		shortName := stripPackagePrefix(refName)
-		typeFile := findTypeFile(shortName, r.typeDirs)
-		if typeFile != "" {
-			schema := generateSchemaForTypeAST(shortName, typeFile, r)
-			if schema != nil {
-				r.schemas[refName] = schema
-			} else {
-				r.schemas[refName] = map[string]interface{}{"type": "object"}
-			}
-		} else {
-			r.schemas[refName] = map[string]interface{}{"type": "object"}
-		}
+	if _, known := r.schemas[refName]; known {
+		return refName
 	}
+
+	if schema, ok := openAPIPrimitiveSchema(refName); ok {
+		r.schemas[refName] = schema
+		return refName
+	}
+
+	shortName := stripPackagePrefix(refName)
+	typeFile := findTypeFile(shortName, r.typeDirs)
+	if typeFile == "" {
+		r.warn("type %s named by an annotation is not in any configured TypeDirs, described as an untyped object", refType)
+		r.schemas[refName] = map[string]interface{}{"type": "object"}
+		return refName
+	}
+
+	// The same resolver the field path uses, so a declaration that is not a struct - a named
+	// string, an alias to another package's type - is described as what it is rather than
+	// abandoned. Describing `type DeviceType string` as an object rejects the plain string
+	// the handler sends.
+	schema, _ := schemaForNamedTypeAST(shortName, typeFile, r)
+	if schema == nil {
+		r.warn("type %s in %s has no schema this generator can express, described as an untyped object", refType, typeFile)
+		schema = map[string]interface{}{"type": "object"}
+	}
+
+	r.schemas[refName] = schema
 	return refName
+}
+
+// openAPIPrimitiveSchema reports the schema for a token that names an OpenAPI type rather
+// than a Go one. A multipart upload is declared as `file`, and the primitives arrive from
+// @Param declarations; none of them is a missing Go type worth warning about.
+func openAPIPrimitiveSchema(name string) (map[string]interface{}, bool) {
+	switch name {
+	case "file":
+		return map[string]interface{}{"type": "string", "format": "binary"}, true
+	case "string", "boolean", "integer", "number", "object", "array":
+		return map[string]interface{}{"type": name}, true
+	}
+	return nil, false
 }
 
 // ---------------------------------------------------------------------------
@@ -1009,7 +1036,11 @@ func buildPathItem(tags tagSet, reg *schemaRegistry) PathItem {
 // ---------------------------------------------------------------------------
 
 // findTypeFile searches dirs for a Go file containing a type with the given name.
+// A compatibility shim declaring `Thing = other.Thing` is a signpost, not a declaration.
+// Taking it because its directory came first describes the type it points at as an object
+// accepting anything, so an alias is only used when nothing declares the type outright.
 func findTypeFile(typeName string, dirs []string) string {
+	var aliasPath string
 	for _, dir := range dirs {
 		entries, err := os.ReadDir(dir)
 		if err != nil {
@@ -1035,14 +1066,21 @@ func findTypeFile(typeName string, dirs []string) string {
 					if !ok {
 						continue
 					}
-					if typeSpec.Name.Name == typeName {
-						return path
+					if typeSpec.Name.Name != typeName {
+						continue
 					}
+					if typeSpec.Assign.IsValid() {
+						if aliasPath == "" {
+							aliasPath = path
+						}
+						continue
+					}
+					return path
 				}
 			}
 		}
 	}
-	return ""
+	return aliasPath
 }
 
 // findReflectTypeByName is a stub for resolving a struct name to reflect.Type.

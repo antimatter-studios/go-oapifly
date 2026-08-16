@@ -105,22 +105,11 @@ func (g *Generator) Generate() map[string]interface{} {
 			}
 			paths[path][method] = buildPathItem(tags, reg)
 		}
-		schemaStructs := extractSchemaAnnotatedStructs(astFile)
-		for _, structName := range schemaStructs {
-			if _, ok := reg.schemas[structName]; !ok {
-				shortName := stripPackagePrefix(structName)
-				typeFile := findTypeFile(shortName, reg.typeDirs)
-				if typeFile != "" {
-					schema := generateSchemaForTypeAST(shortName, typeFile, reg)
-					if schema != nil {
-						reg.schemas[structName] = schema
-					} else {
-						reg.schemas[structName] = map[string]interface{}{"type": "object"}
-					}
-				} else {
-					reg.schemas[structName] = map[string]interface{}{"type": "object"}
-				}
-			}
+		// A struct carrying a @Schema annotation is registered the same way a type named by
+		// a response annotation is, so an alias or a named non-struct is described as what
+		// it is and anything unresolvable is reported rather than quietly widened.
+		for _, structName := range extractSchemaAnnotatedStructs(astFile) {
+			reg.resolve(structName)
 		}
 	}
 
