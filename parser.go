@@ -445,6 +445,58 @@ func schemaForNamedTypeAST(typeName, filePath string, reg *schemaRegistry) (sche
 	return nil, false
 }
 
+// embeddedFields returns the properties an embedded type contributes to the struct that
+// embeds it. A type outside the configured TypeDirs cannot be read, and its fields would
+// disappear from the schema without a word, so that is reported rather than passed over.
+func (r *schemaRegistry) embeddedFields(expr ast.Expr) (map[string]interface{}, []string) {
+	name, display := embeddedTypeName(expr)
+	if name == "" {
+		return nil, nil
+	}
+
+	if r.resolving[name] {
+		// Reached from its own definition further up the stack; the fields are already there.
+		return nil, nil
+	}
+
+	typeFile := findTypeFile(name, r.typeDirs)
+	if typeFile == "" {
+		r.warn("embedded type %s is not in any configured TypeDirs, its fields are missing from the schema", display)
+		return nil, nil
+	}
+
+	r.resolving[name] = true
+	schema, isStruct := schemaForNamedTypeAST(name, typeFile, r)
+	delete(r.resolving, name)
+
+	if !isStruct || schema == nil {
+		r.warn("embedded type %s in %s is not a struct, its fields are missing from the schema", display, typeFile)
+		return nil, nil
+	}
+
+	props, _ := schema["properties"].(map[string]interface{})
+	required, _ := schema["required"].([]string)
+	return props, required
+}
+
+// embeddedTypeName reports the type name of an embedded field, and how to name it in a
+// warning. An embedded field is a bare type, a pointer to one, or a qualified one.
+func embeddedTypeName(expr ast.Expr) (name, display string) {
+	switch t := expr.(type) {
+	case *ast.Ident:
+		return t.Name, t.Name
+	case *ast.StarExpr:
+		return embeddedTypeName(t.X)
+	case *ast.SelectorExpr:
+		pkg, ok := t.X.(*ast.Ident)
+		if !ok {
+			return t.Sel.Name, t.Sel.Name
+		}
+		return t.Sel.Name, pkg.Name + "." + t.Sel.Name
+	}
+	return "", ""
+}
+
 // buildSchemaFromStructAST builds an OpenAPI schema from an AST struct type.
 func buildSchemaFromStructAST(st *ast.StructType, reg *schemaRegistry) map[string]interface{} {
 	props := map[string]interface{}{}
@@ -452,7 +504,15 @@ func buildSchemaFromStructAST(st *ast.StructType, reg *schemaRegistry) map[strin
 
 	for _, field := range st.Fields.List {
 		if len(field.Names) == 0 {
-			continue // skip embedded fields
+			// Go promotes an embedded struct's fields into the same JSON object, so they are
+			// merged here. Skipping them described a type built entirely from embeds - a
+			// gorm.Model and a payload struct, say - as an object with no fields at all.
+			embeddedProps, embeddedRequired := reg.embeddedFields(field.Type)
+			for name, schema := range embeddedProps {
+				props[name] = schema
+			}
+			required = append(required, embeddedRequired...)
+			continue
 		}
 
 		jsonName, omitempty, skip := resolveJSONFieldNameAST(field)
@@ -585,7 +645,12 @@ func resolveFieldTypeAST(expr ast.Expr, reg *schemaRegistry) map[string]interfac
 		}
 		return reg.refOrObject(t.Sel.Name, qualified)
 	case *ast.MapType:
-		return map[string]interface{}{"type": "object"}
+		// The value type is as describable as any other, and a consumer reading
+		// map[string]SambaUser deserves to know what the values are.
+		return map[string]interface{}{
+			"type":                 "object",
+			"additionalProperties": resolveFieldTypeAST(t.Value, reg),
+		}
 	default:
 		return map[string]interface{}{"type": "object"}
 	}
