@@ -65,11 +65,11 @@ func TestParameterExample_TypedByDataType(t *testing.T) {
 		example  string
 		want     interface{}
 	}{
-		{"int list", "[]int", "[1,2]", []interface{}{int64(1), int64(2)}},
+		{"int list", "[]int", "[1,2]", []interface{}{float64(1), float64(2)}},
 		{"string list", "[]string", "[a,b]", []interface{}{"a", "b"}},
 		{"bool list", "[]bool", "[true,false]", []interface{}{true, false}},
 		{"empty list", "[]int", "[]", []interface{}{}},
-		{"scalar int", "int", "20", int64(20)},
+		{"scalar int", "int", "20", float64(20)},
 		{"scalar bool", "bool", "true", true},
 		{"scalar number", "number", "1.5", 1.5},
 		{"scalar string", "string", "gdt", "gdt"},
@@ -119,5 +119,40 @@ func TestBuildParameters_ArrayQueryParam(t *testing.T) {
 	example, isList := got["example"].([]interface{})
 	if !isList || len(example) != 2 || example[0] != float64(1) || example[1] != float64(2) {
 		t.Errorf("example = %#v, want the JSON list [1,2]", got["example"])
+	}
+}
+
+// A list-shaped formData parameter - several files, several tags - is an array in the
+// multipart schema, the same way it is in a query string. Building the scalar schema by
+// hand here left the request-body path with no idea what a `[]string` was.
+func TestBuildRequestBody_FormDataArray(t *testing.T) {
+	reg := newSchemaRegistry(nil)
+	params := []parsedParam{
+		{Name: "tags", In: "formData", DataType: "[]string", Required: false},
+	}
+	rb := buildRequestBody(params, reg)
+	if rb == nil {
+		t.Fatal("expected non-nil")
+	}
+	content := rb.Content["multipart/form-data"].(map[string]interface{})
+	schema := content["schema"].(map[string]interface{})
+	props := schema["properties"].(map[string]interface{})
+	tags := props["tags"].(map[string]interface{})
+	if tags["type"] != "array" {
+		t.Fatalf("tags schema = %v, want an array", tags)
+	}
+	items, _ := tags["items"].(map[string]interface{})
+	if items["type"] != "string" {
+		t.Errorf("tags items = %v, want string items", items)
+	}
+}
+
+// One reading of "text as a typed value" serves both struct tags and parameter examples,
+// so an integer example is the same kind of number whichever annotation it came from.
+func TestTypedValue_SharedBetweenTagsAndParams(t *testing.T) {
+	fromParam := parameterExample("int", "3")
+	fromTag := typedTagValue("3", map[string]interface{}{"type": "integer"})
+	if !reflect.DeepEqual(fromParam, fromTag) {
+		t.Errorf("parameter example %#v and tag value %#v disagree on the same text", fromParam, fromTag)
 	}
 }

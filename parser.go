@@ -267,25 +267,36 @@ func parameterExample(dataType, example string) interface{} {
 		}
 		return values
 	}
-	switch dataTypeToOpenAPIType(dataType) {
-	case "integer":
-		if v, err := strconv.ParseInt(example, 10, 64); err == nil {
-			return v
-		}
-	case "number":
-		if v, err := strconv.ParseFloat(example, 64); err == nil {
-			return v
-		}
-	case "boolean":
-		if v, err := strconv.ParseBool(example); err == nil {
-			return v
-		}
-	}
-	return example
+	return typedValue(example, dataTypeToOpenAPIType(dataType))
 }
 
-// isStructRef returns true if the data type refers to a struct (not a primitive).
+// typedValue reads annotation text as a value of the OpenAPI type it is meant to be.
+// Annotations are always written as text, so an integer's "3" has to become a number on
+// the way in - a quoted example on an integer field describes a value the field rejects.
+// Integers are read as float64 like numbers, which is the one numeric type JSON has, so
+// a value is the same whether it came from an annotation or from decoding a document.
+// Text that does not parse as the type is returned unchanged rather than dropped, so a
+// wrong value shows up in the output where it can be fixed.
+func typedValue(raw, openapiType string) interface{} {
+	switch openapiType {
+	case "integer", "number":
+		if n, err := strconv.ParseFloat(raw, 64); err == nil {
+			return n
+		}
+	case "boolean":
+		if b, err := strconv.ParseBool(raw); err == nil {
+			return b
+		}
+	}
+	return raw
+}
+
+// isStructRef returns true if the data type refers to a struct (not a primitive or a
+// list of primitives).
 func isStructRef(dataType string) bool {
+	if item, ok := arrayItemType(dataType); ok {
+		return isStructRef(item)
+	}
 	switch strings.ToLower(dataType) {
 	case "string", "int", "integer", "number", "float", "float64",
 		"bool", "boolean", "file":
@@ -513,20 +524,10 @@ func applyFieldConstraints(schema map[string]interface{}, field *ast.Field) {
 	}
 }
 
-// typedTagValue reads a tag's text as the type the schema declares. Tag values are always
-// written as text, so an integer field's "3" has to become a number on the way in.
+// typedTagValue reads a tag's text as the type the schema declares.
 func typedTagValue(raw string, schema map[string]interface{}) interface{} {
-	switch schema["type"] {
-	case "integer", "number":
-		if n, err := strconv.ParseFloat(raw, 64); err == nil {
-			return n
-		}
-	case "boolean":
-		if b, err := strconv.ParseBool(raw); err == nil {
-			return b
-		}
-	}
-	return raw
+	openapiType, _ := schema["type"].(string)
+	return typedValue(raw, openapiType)
 }
 
 // extractTagValue extracts a specific key's value from a Go struct tag string.
@@ -919,10 +920,7 @@ func buildRequestBody(params []parsedParam, reg *schemaRegistry) *RequestBody {
 			refName := reg.resolve(p.DataType)
 			schema = map[string]interface{}{"$ref": "#/components/schemas/" + refName}
 		} else {
-			schema = map[string]interface{}{"type": dataTypeToOpenAPIType(p.DataType)}
-			if f := dataTypeToFormat(p.DataType); f != "" {
-				schema["format"] = f
-			}
+			schema = dataTypeSchema(p.DataType)
 		}
 		return &RequestBody{
 			Description: p.Description,
@@ -937,11 +935,7 @@ func buildRequestBody(params []parsedParam, reg *schemaRegistry) *RequestBody {
 	props := map[string]interface{}{}
 	var required []string
 	for _, p := range formParams {
-		s := map[string]interface{}{"type": dataTypeToOpenAPIType(p.DataType)}
-		if f := dataTypeToFormat(p.DataType); f != "" {
-			s["format"] = f
-		}
-		props[p.Name] = s
+		props[p.Name] = dataTypeSchema(p.DataType)
 		if p.Required {
 			required = append(required, p.Name)
 		}

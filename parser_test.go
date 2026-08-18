@@ -278,8 +278,8 @@ func TestBuildParameters_PathOnly(t *testing.T) {
 	}
 	// An example carries the declared type: an integer parameter's example is an integer,
 	// not the text it was written as, so a reader validating it against the schema agrees.
-	if result[0].Example != int64(123) {
-		t.Errorf("example = %#v, want int64(123)", result[0].Example)
+	if result[0].Example != float64(123) {
+		t.Errorf("example = %#v, want float64(123)", result[0].Example)
 	}
 }
 
@@ -307,8 +307,8 @@ func TestBuildParameters_PathQueryHeader(t *testing.T) {
 	if result[1].Schema["type"] != "integer" {
 		t.Errorf("page schema = %v", result[1].Schema)
 	}
-	if result[2].Example != int64(20) {
-		t.Errorf("limit example = %#v, want int64(20)", result[2].Example)
+	if result[2].Example != float64(20) {
+		t.Errorf("limit example = %#v, want float64(20)", result[2].Example)
 	}
 	// Header param
 	if result[3].In != "header" || result[3].Name != "Authorization" {
