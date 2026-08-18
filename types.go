@@ -26,8 +26,8 @@ type Parameter struct {
 	In          string            `json:"in" yaml:"in"`
 	Description string            `json:"description,omitempty" yaml:"description,omitempty"`
 	Required    bool              `json:"required" yaml:"required"`
-	Schema      map[string]string `json:"schema,omitempty" yaml:"schema,omitempty"`
-	Example     interface{}       `json:"example,omitempty" yaml:"example,omitempty"`
+	Schema      map[string]interface{} `json:"schema,omitempty" yaml:"schema,omitempty"`
+	Example     interface{}            `json:"example,omitempty" yaml:"example,omitempty"`
 }
 
 // RequestBody represents an OpenAPI request body.

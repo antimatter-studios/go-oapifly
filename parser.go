@@ -225,13 +225,64 @@ func dataTypeToFormat(dataType string) string {
 	return ""
 }
 
-// dataTypeSchema builds a Parameter.Schema map for a swaggo data type.
-func dataTypeSchema(dataType string) map[string]string {
-	schema := map[string]string{"type": dataTypeToOpenAPIType(dataType)}
+// arrayItemType reports the element type of a list-shaped @Param data type, and whether
+// it was one. Both spellings are accepted: Go's `[]int`, and swaggo's bare `array`, whose
+// items are strings because that is all the annotation can say.
+func arrayItemType(dataType string) (string, bool) {
+	switch {
+	case strings.HasPrefix(dataType, "[]"):
+		return dataType[len("[]"):], true
+	case strings.EqualFold(dataType, "array"):
+		return "string", true
+	}
+	return "", false
+}
+
+// dataTypeSchema builds a Parameter.Schema map for a swaggo data type. A list-shaped
+// type becomes an array schema with typed items; anything else is the scalar it names.
+func dataTypeSchema(dataType string) map[string]interface{} {
+	if item, ok := arrayItemType(dataType); ok {
+		return map[string]interface{}{"type": "array", "items": dataTypeSchema(item)}
+	}
+	schema := map[string]interface{}{"type": dataTypeToOpenAPIType(dataType)}
 	if f := dataTypeToFormat(dataType); f != "" {
 		schema["format"] = f
 	}
 	return schema
+}
+
+// parameterExample turns the text of an example(...) attribute into a value of the
+// declared type: integers, numbers and booleans parse, a list-shaped type splits its
+// bracketed comma-separated text and types each element. Text that does not parse as
+// the declared type is passed through unchanged rather than dropped, so a wrong example
+// shows up in the output where it can be fixed.
+func parameterExample(dataType, example string) interface{} {
+	if item, ok := arrayItemType(dataType); ok {
+		body := strings.TrimSuffix(strings.TrimPrefix(strings.TrimSpace(example), "["), "]")
+		values := []interface{}{}
+		if strings.TrimSpace(body) == "" {
+			return values
+		}
+		for _, part := range strings.Split(body, ",") {
+			values = append(values, parameterExample(item, strings.TrimSpace(part)))
+		}
+		return values
+	}
+	switch dataTypeToOpenAPIType(dataType) {
+	case "integer":
+		if v, err := strconv.ParseInt(example, 10, 64); err == nil {
+			return v
+		}
+	case "number":
+		if v, err := strconv.ParseFloat(example, 64); err == nil {
+			return v
+		}
+	case "boolean":
+		if v, err := strconv.ParseBool(example); err == nil {
+			return v
+		}
+	}
+	return example
 }
 
 // isStructRef returns true if the data type refers to a struct (not a primitive).
@@ -950,7 +1001,7 @@ func buildParameters(routerPath string, params []parsedParam) []Parameter {
 		name := routerPath[open+1 : close]
 
 		desc := "Path parameter '" + name + "'"
-		schema := map[string]string{"type": "string"}
+		schema := map[string]interface{}{"type": "string"}
 		var example interface{} = name
 
 		if meta, ok := pathMeta[name]; ok {
@@ -959,7 +1010,7 @@ func buildParameters(routerPath string, params []parsedParam) []Parameter {
 			}
 			schema = dataTypeSchema(meta.DataType)
 			if meta.Example != "" {
-				example = meta.Example
+				example = parameterExample(meta.DataType, meta.Example)
 			}
 		}
 
@@ -987,7 +1038,7 @@ func buildParameters(routerPath string, params []parsedParam) []Parameter {
 			Schema:      dataTypeSchema(p.DataType),
 		}
 		if p.Example != "" {
-			param.Example = p.Example
+			param.Example = parameterExample(p.DataType, p.Example)
 		}
 		result = append(result, param)
 	}
