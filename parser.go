@@ -153,6 +153,11 @@ func openAPIPrimitiveSchema(name string) (map[string]interface{}, bool) {
 // ---------------------------------------------------------------------------
 
 // parsedParam is the structured result of parsing a single @Param annotation.
+//
+// The bounds are kept as the text they were written as and typed when they join a schema, the
+// same way a struct tag's constraint is: an annotation can only carry text, and a bound beside
+// an integer has to become a number or it would describe a parameter that rejects every value
+// it accepts.
 type parsedParam struct {
 	Name        string
 	In          string // path, query, header, body, formData
@@ -160,10 +165,17 @@ type parsedParam struct {
 	Required    bool
 	Description string
 	Example     string
+	Minimum     string
+	Maximum     string
+	Enums       []string
 }
 
 // parseParam parses a single @Param tag value into structured data.
-// Format: name location dataType required "description" [example(...)]
+// Format: name location dataType required "description" [attribute(value)...]
+//
+// The attributes are swaggo's: example, minimum, maximum and enums. A Go type says what shape
+// a value has, not which values are allowed, so where a handler enforces a bound these are how
+// the description states it.
 func parseParam(value string) (parsedParam, bool) {
 	parts := strings.Fields(value)
 	if len(parts) < 4 {
@@ -185,12 +197,28 @@ func parseParam(value string) (parsedParam, bool) {
 		}
 	}
 
-	// Extract example from attributes
+	// Extract the attributes
 	for i := 4; i < len(parts); i++ {
 		part := parts[i]
-		if strings.HasPrefix(part, "example(") && strings.HasSuffix(part, ")") {
-			p.Example = part[len("example(") : len(part)-1]
-		} else if part == "example" && i+1 < len(parts) {
+		if name, value, ok := parseAttribute(part); ok {
+			switch name {
+			case "example":
+				p.Example = value
+			case "minimum":
+				p.Minimum = value
+			case "maximum":
+				p.Maximum = value
+			case "enums":
+				for _, entry := range strings.Split(value, ",") {
+					if entry = strings.TrimSpace(entry); entry != "" {
+						p.Enums = append(p.Enums, entry)
+					}
+				}
+			}
+			continue
+		}
+		// swaggo also writes an example as `example "value"`.
+		if part == "example" && i+1 < len(parts) {
 			next := parts[i+1]
 			if strings.HasPrefix(next, "\"") && strings.HasSuffix(next, "\"") && len(next) > 1 {
 				p.Example = next[1 : len(next)-1]
@@ -199,6 +227,59 @@ func parseParam(value string) (parsedParam, bool) {
 	}
 
 	return p, true
+}
+
+// parseAttribute reads one `name(value)` attribute.
+func parseAttribute(part string) (name, value string, ok bool) {
+	open := strings.Index(part, "(")
+	if open <= 0 || !strings.HasSuffix(part, ")") {
+		return "", "", false
+	}
+	return part[:open], part[open+1 : len(part)-1], true
+}
+
+// applyParamConstraints puts the bounds an annotation declared into a parameter's schema,
+// typed as the schema is.
+//
+// A bound that is not a value of that type is left off rather than written as text: describing
+// a parameter as accepting only the string "one" would reject every number it really takes. A
+// missing bound is less precise than the truth; a wrong one contradicts the handler, which is
+// why nothing is coerced here. But a bound the caller wrote and this generator dropped is
+// reported, because silently discarding it leaves a description weaker than its author believes
+// it to be - the same reason an unresolvable type is warned about rather than widened.
+func applyParamConstraints(schema map[string]interface{}, p parsedParam, reg *schemaRegistry) {
+	openapiType, _ := schema["type"].(string)
+
+	for _, bound := range []struct{ key, raw string }{{"minimum", p.Minimum}, {"maximum", p.Maximum}} {
+		if bound.raw == "" {
+			continue
+		}
+		value := typedValue(bound.raw, openapiType)
+		if value == bound.raw && openapiType != "string" {
+			reg.warn("parameter %q declares %s(%s), which is not a %s, so the bound is left off",
+				p.Name, bound.key, bound.raw, openapiType)
+			continue
+		}
+		schema[bound.key] = value
+	}
+
+	if len(p.Enums) > 0 {
+		values := make([]interface{}, 0, len(p.Enums))
+		for _, entry := range p.Enums {
+			value := typedValue(entry, openapiType)
+			if value == entry && openapiType != "string" {
+				// One entry is not a value of this type, so the annotation is wrong about the
+				// set. Keeping the rest would describe the parameter as forbidding whichever
+				// value the mistyped one meant, which rejects input the handler accepts; an
+				// unconstrained parameter is less precise and never wrong.
+				reg.warn("parameter %q declares the enum value %q, which is not a %s, so the whole enum is left off",
+					p.Name, entry, openapiType)
+				return
+			}
+			values = append(values, value)
+		}
+		schema["enum"] = values
+	}
 }
 
 // parseAllParams parses all @Param tag values.
@@ -219,9 +300,14 @@ func parseAllParams(paramTags []string) []parsedParam {
 // dataTypeToOpenAPIType converts a swaggo data type to an OpenAPI type string.
 func dataTypeToOpenAPIType(dataType string) string {
 	switch strings.ToLower(dataType) {
-	case "int", "integer":
+	// The sized and unsigned spellings are here because an annotation carries whatever the
+	// handler's own signature says. Without them an int64 parameter was described as a string,
+	// so a consumer sent "1" where a number was wanted, and any bound declared on it was
+	// dropped for not being a value of the schema's type.
+	case "int", "integer", "int8", "int16", "int32", "int64",
+		"uint", "uint8", "uint16", "uint32", "uint64":
 		return "integer"
-	case "number", "float", "float64":
+	case "number", "float", "float32", "float64":
 		return "number"
 	case "bool", "boolean":
 		return "boolean"
@@ -864,7 +950,7 @@ func methodsFor(method string) ([]string, bool) {
 
 // buildParameters builds the OpenAPI parameters list from parsed @Param data
 // and URL path template placeholders.
-func buildParameters(routerPath string, params []parsedParam) []Parameter {
+func buildParameters(routerPath string, params []parsedParam, reg *schemaRegistry) []Parameter {
 	var result []Parameter
 
 	// Index path param metadata for merging with URL template
@@ -899,6 +985,7 @@ func buildParameters(routerPath string, params []parsedParam) []Parameter {
 				desc = meta.Description
 			}
 			schema = dataTypeSchema(meta.DataType)
+			applyParamConstraints(schema, meta, reg)
 			if meta.Example != "" {
 				example = parameterExample(meta.DataType, meta.Example)
 			}
@@ -920,12 +1007,14 @@ func buildParameters(routerPath string, params []parsedParam) []Parameter {
 		if p.In != "query" && p.In != "header" {
 			continue
 		}
+		schema := dataTypeSchema(p.DataType)
+		applyParamConstraints(schema, p, reg)
 		param := Parameter{
 			Name:        p.Name,
 			In:          p.In,
 			Description: p.Description,
 			Required:    p.Required,
-			Schema:      dataTypeSchema(p.DataType),
+			Schema:      schema,
 		}
 		if p.Example != "" {
 			param.Example = parameterExample(p.DataType, p.Example)
@@ -1198,7 +1287,7 @@ func buildPathItem(routerPath string, tags tagSet, reg *schemaRegistry) PathItem
 
 	var parameters []Parameter
 	if routerPath != "" {
-		parameters = buildParameters(routerPath, params)
+		parameters = buildParameters(routerPath, params, reg)
 	}
 
 	requestBody := buildRequestBody(params, reg)

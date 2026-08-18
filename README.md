@@ -64,6 +64,8 @@ Annotate your handler methods with standard swaggo-style comments:
 // @Tags users
 // @Produce json
 // @Param id path string true "User ID" example(abc-123)
+// @Param page query int false "Page number" minimum(1)
+// @Param limit query int false "Page size" minimum(1) maximum(100)
 // @Success 200 {object} User "User found"
 // @Failure 404 {object} ErrorResponse "User not found"
 // @Router /api/v1/users/{id} [get]
@@ -73,6 +75,22 @@ func (c *UserController) GetUser(ctx *fiber.Ctx) error {
 ```
 
 oapifly will parse these annotations and produce the corresponding OpenAPI path entries, parameters, and response schemas.
+
+### Parameter constraints
+
+A Go type says what shape a value has, not which values are allowed: a page number is an
+integer and so is `-1`. Where a handler enforces a bound, `minimum`, `maximum` and `enums`
+state it in the description, so a consumer generating a request sends something the handler
+accepts and a boundary-probing tester stops reporting the two as disagreeing.
+
+```go
+// @Param id   path  int    true  "Key ID"   minimum(1)
+// @Param type query string false "Key type" enums(authorized,device)
+```
+
+Each is typed as the parameter is, so a bound beside an integer becomes a number. A bound that
+is not a value of that type is left off rather than written as text, since describing a
+parameter as accepting only the string `"one"` would reject every number it really takes.
 
 ### Generic types
 
