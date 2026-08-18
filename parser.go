@@ -7,7 +7,6 @@ import (
 	"go/parser"
 	"go/token"
 	"os"
-	"reflect"
 	"strconv"
 	"strings"
 )
@@ -297,170 +296,18 @@ func isStructRef(dataType string) bool {
 }
 
 // ---------------------------------------------------------------------------
-// Reflection-based type mapping (for runtime schema generation)
-// ---------------------------------------------------------------------------
-
-// goKindToJSONType maps a Go reflect.Type to its JSON/OpenAPI type string.
-// Distinguishes integer from number per the OpenAPI spec.
-func goKindToJSONType(t reflect.Type) string {
-	if t.Kind() == reflect.Ptr {
-		t = t.Elem()
-	}
-	switch t.Kind() {
-	case reflect.String:
-		return "string"
-	case reflect.Bool:
-		return "boolean"
-	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
-		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
-		return "integer"
-	case reflect.Float32, reflect.Float64:
-		return "number"
-	case reflect.Slice, reflect.Array:
-		return "array"
-	case reflect.Map, reflect.Struct:
-		return "object"
-	default:
-		return "object"
-	}
-}
-
-// goKindToOpenAPIFormat returns the OpenAPI format hint for a Go type
-// (e.g. "int32", "int64", "float", "double"). Returns "" if no format applies.
-func goKindToOpenAPIFormat(t reflect.Type) string {
-	if t.Kind() == reflect.Ptr {
-		t = t.Elem()
-	}
-	switch t.Kind() {
-	case reflect.Int32:
-		return "int32"
-	case reflect.Int, reflect.Int64:
-		return "int64"
-	case reflect.Float32:
-		return "float"
-	case reflect.Float64:
-		return "double"
-	default:
-		return ""
-	}
-}
-
-// resolveJSONFieldName extracts the JSON field name and options from a struct
-// field's json tag. Returns skip=true for fields tagged with json:"-".
-func resolveJSONFieldName(field reflect.StructField) (name string, omitempty bool, skip bool) {
-	name = field.Name
-	tag, ok := field.Tag.Lookup("json")
-	if !ok {
-		return name, false, false
-	}
-	parts := strings.Split(tag, ",")
-	if parts[0] == "-" {
-		return "", false, true
-	}
-	if parts[0] != "" {
-		name = parts[0]
-	}
-	for _, part := range parts[1:] {
-		if part == "omitempty" {
-			omitempty = true
-			break
-		}
-	}
-	return name, omitempty, false
-}
-
-// resolveFieldTypeReflect resolves a struct field type to OpenAPI type info.
-func resolveFieldTypeReflect(rt reflect.Type) fieldTypeInfo {
-	if rt.Kind() == reflect.Ptr {
-		rt = rt.Elem()
-	}
-	jsonType := goKindToJSONType(rt)
-
-	// Struct → return as schema $ref
-	if rt.Kind() == reflect.Struct && jsonType == "object" {
-		return fieldTypeInfo{Ref: rt.Name()}
-	}
-
-	// Slice/Array → include items with element type
-	if rt.Kind() == reflect.Slice || rt.Kind() == reflect.Array {
-		elemType := rt.Elem()
-		if elemType.Kind() == reflect.Ptr {
-			elemType = elemType.Elem()
-		}
-		items := map[string]interface{}{"type": goKindToJSONType(elemType)}
-		if f := goKindToOpenAPIFormat(elemType); f != "" {
-			items["format"] = f
-		}
-		return fieldTypeInfo{Schema: map[string]interface{}{
-			"type":  "array",
-			"items": items,
-		}}
-	}
-
-	// Primitive → type + optional format
-	schema := map[string]interface{}{"type": jsonType}
-	if f := goKindToOpenAPIFormat(rt); f != "" {
-		schema["format"] = f
-	}
-	return fieldTypeInfo{Schema: schema}
-}
-
-// generateSchemaForTypeReflect generates a JSON Schema map using Go reflection.
-func generateSchemaForTypeReflect(rt reflect.Type) map[string]interface{} {
-	if rt.Kind() == reflect.Ptr {
-		rt = rt.Elem()
-	}
-	props := map[string]interface{}{}
-	required := []string{}
-	for i := 0; i < rt.NumField(); i++ {
-		name, omitempty, skip := resolveJSONFieldName(rt.Field(i))
-		if skip || name == "" {
-			continue
-		}
-		fieldType := resolveFieldTypeReflect(rt.Field(i).Type)
-		props[name] = fieldType.Schema
-		if !omitempty {
-			required = append(required, name)
-		}
-	}
-	return map[string]interface{}{
-		"type":       "object",
-		"properties": props,
-		"required":   required,
-	}
-}
-
-// ---------------------------------------------------------------------------
 // AST-based schema generation
 // ---------------------------------------------------------------------------
 
-// generateSchemaForTypeAST parses a Go source file and generates an OpenAPI
-// schema for the named struct type using its AST. This replaces the broken
-// reflection-based approach since findReflectTypeByName cannot resolve
-// arbitrary types at runtime.
+// generateSchemaForTypeAST reports the schema of the named type when it is declared as a
+// struct in filePath, and nil for anything else - a named string, an alias, an interface,
+// or a name the file does not declare.
 func generateSchemaForTypeAST(typeName, filePath string, reg *schemaRegistry) map[string]interface{} {
-	f, err := parseFile(filePath)
-	if err != nil {
+	schema, isStruct := schemaForNamedTypeAST(typeName, filePath, reg)
+	if !isStruct {
 		return nil
 	}
-	for _, decl := range f.Decls {
-		genDecl, ok := decl.(*ast.GenDecl)
-		if !ok || genDecl.Tok != token.TYPE {
-			continue
-		}
-		for _, spec := range genDecl.Specs {
-			typeSpec, ok := spec.(*ast.TypeSpec)
-			if !ok || typeSpec.Name.Name != typeName {
-				continue
-			}
-			structType, ok := typeSpec.Type.(*ast.StructType)
-			if !ok {
-				continue
-			}
-			return buildSchemaFromStructAST(structType, reg)
-		}
-	}
-	return nil
+	return schema
 }
 
 // schemaForNamedTypeAST resolves a named type declaration to a schema, reporting whether it
@@ -1394,10 +1241,4 @@ func findTypeFile(typeName string, dirs []string) string {
 		}
 	}
 	return aliasPath
-}
-
-// findReflectTypeByName is a stub for resolving a struct name to reflect.Type.
-// TODO: Implement using a type registry for full schema resolution.
-func findReflectTypeByName(name string) reflect.Type {
-	return nil
 }

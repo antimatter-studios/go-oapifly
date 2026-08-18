@@ -63,9 +63,3 @@ type PathItem struct {
 	RequestBody *RequestBody        `json:"requestBody,omitempty" yaml:"requestBody,omitempty"`
 	Responses   map[string]Response `json:"responses,omitempty" yaml:"responses,omitempty"`
 }
-
-type fieldTypeInfo struct {
-	Schema   map[string]interface{}
-	Ref      string
-	Optional bool
-}
