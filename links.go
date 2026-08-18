@@ -1,7 +1,6 @@
 package oapifly
 
 import (
-	"strconv"
 	"strings"
 )
 
@@ -51,12 +50,10 @@ func parseLink(value string) (parsedLink, bool) {
 
 	link := parsedLink{Status: fields[0], Name: fields[1], OperationID: fields[2]}
 
-	// The status has to be one: a link hangs off a particular response, and a word here means
-	// the annotation's fields are in the wrong order.
-	if code, err := strconv.Atoi(link.Status); err != nil || code < 100 || code > 599 {
-		return parsedLink{}, false
-	}
-
+	// The status is not checked for being a number. `default` is a legal response key, and so
+	// are the 2XX ranges, so the only honest test of it is whether the operation declares a
+	// response under that key - which attachLinks does, and which also catches the fields being
+	// written in the wrong order.
 	for _, field := range fields[3:] {
 		name, expression, found := strings.Cut(field, "=")
 		if !found || name == "" || expression == "" {
@@ -95,6 +92,13 @@ func attachLinks(responses map[string]Response, tagValues []string, operation st
 		if response.Links == nil {
 			response.Links = map[string]Link{}
 		}
+		// Two links of the same name on one response are one link: the map keeps the last, so
+		// the earlier relationship would vanish with nothing said. Usually a copied annotation
+		// whose name was not changed with its target.
+		if existing, taken := response.Links[link.Name]; taken {
+			reg.warn("%s declares the link %q on its %s response twice, to %q and then to %q; only the last survives",
+				operation, link.Name, link.Status, existing.OperationID, link.OperationID)
+		}
 		response.Links[link.Name] = Link{OperationID: link.OperationID, Parameters: link.Parameters}
 		responses[link.Status] = response
 	}
@@ -108,11 +112,15 @@ func attachLinks(responses map[string]Response, tagValues []string, operation st
 // nothing declares is a chain a consumer cannot follow, and the usual cause is an @ID that was
 // renamed on one side only.
 func reportUnknownLinkTargets(paths map[string]map[string]PathItem, warn func(string, ...interface{})) {
-	declared := map[string]bool{}
+	// Counted rather than collected into a set: the specification requires an operationId to be
+	// unique across the document, and a link naming one that two operations share does not say
+	// which of them it means - so a consumer following it picks one, and the description cannot
+	// tell it which was intended.
+	declared := map[string]int{}
 	for _, methods := range paths {
 		for _, item := range methods {
 			if item.OperationID != "" {
-				declared[item.OperationID] = true
+				declared[item.OperationID]++
 			}
 		}
 	}
@@ -121,9 +129,15 @@ func reportUnknownLinkTargets(paths map[string]map[string]PathItem, warn func(st
 		for method, item := range methods {
 			for status, response := range item.Responses {
 				for name, link := range response.Links {
-					if !declared[link.OperationID] {
+					switch declared[link.OperationID] {
+					case 0:
 						warn("%s %s declares the link %q on its %s response to the operation %q, which nothing in this document declares",
 							strings.ToUpper(method), path, name, status, link.OperationID)
+					case 1:
+						// The only case that resolves to exactly one operation.
+					default:
+						warn("%s %s declares the link %q on its %s response to the operation %q, which %d operations declare, so the link does not say which one it means",
+							strings.ToUpper(method), path, name, status, link.OperationID, declared[link.OperationID])
 					}
 				}
 			}

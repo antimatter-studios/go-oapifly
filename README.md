@@ -102,7 +102,8 @@ responses:
 ```
 
 The form is `@Link <status> <name> <targetOperationId> [<param>=<expression> ...]`. The status
-must be a response the operation declares; the name is free-form and appears verbatim in a
+must be a response the operation declares — `default` and the `2XX` ranges included, since those
+are response keys too; the name is free-form and appears verbatim in a
 consumer's reports, so it should name the step; the target is an `@ID` declared somewhere in the
 same document. Expressions — `$response.body#/guid`, `$request.path.id`,
 `$response.header.Location`, `$statusCode` — are passed through untouched, because they are
@@ -111,8 +112,10 @@ evaluated by whoever follows the link.
 Nothing is inferred. Pairing `POST /device` with `GET /device/guid/{deviceGuid}` because they
 look related would mint chains the author never claimed, so a link exists only where an `@Link`
 says so. A link on a status the operation does not declare, one this generator cannot read, and
-one whose target no operation declares are each reported rather than guessed at, and a response
-with no links carries no `links` key at all.
+one whose target no operation declares, one whose target is an `@ID` two operations share (which
+identifies neither), and a second link of the same name on one response (which would silently
+replace the first) are each reported rather than guessed at. A response with no links carries no
+`links` key at all.
 
 ### Parameter constraints
 

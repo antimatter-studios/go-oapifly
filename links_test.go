@@ -50,7 +50,21 @@ func TestParseLink(t *testing.T) {
 		{"empty", "", false, "", "", "", nil},
 		// A parameter has to name what it fills; without the '=' the annotation says nothing.
 		{"parameter without an expression", "201 Read readDevice deviceGuid", false, "", "", "", nil},
-		{"status that is not a status", "created Read readDevice x=$statusCode", false, "", "", "", nil},
+		// `default` is a legal response key, so it is a legal thing to hang a link off.
+		{
+			"a default response",
+			"default Retry retryJob id=$response.body#/id",
+			true, "default", "Retry", "retryJob",
+			map[string]string{"id": "$response.body#/id"},
+		},
+		// Fields in the wrong order parse, and are then caught by the response they name not
+		// existing - which is a better message than "malformed" for what is actually a typo.
+		{
+			"fields in the wrong order",
+			"Read 201 readDevice x=$statusCode",
+			true, "Read", "201", "readDevice",
+			map[string]string{"x": "$statusCode"},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -255,5 +269,90 @@ func ReadDevice() {}
 	links := paths["/api/v1/device"]["post"].Responses["201"].Links
 	if links["Read"].OperationID != "readDevice" {
 		t.Errorf("the link did not survive into the document: %v", links)
+	}
+}
+
+// Two links of the same name on one response are one link, and the lost one is worth a word.
+func TestBuildPathItem_DuplicateLinkNameWarns(t *testing.T) {
+	item, reg := linkedPathItem(t,
+		"201 Read readDevice deviceGuid=$response.body#/guid",
+		"201 Read readSomethingElse deviceGuid=$response.body#/guid",
+	)
+
+	// The last one wins, as a map must, but nobody has to discover that by reading the output.
+	if got := item.Responses["201"].Links["Read"].OperationID; got != "readSomethingElse" {
+		t.Errorf("operationId = %q, want the last declaration", got)
+	}
+	found := false
+	for _, w := range reg.warnings {
+		if strings.Contains(w, "twice") && strings.Contains(w, "readDevice") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("the overwritten link was not reported: %q", reg.warnings)
+	}
+}
+
+// An operationId two operations share identifies neither of them.
+func TestGenerate_LinkToAnAmbiguousOperationWarns(t *testing.T) {
+	dir := t.TempDir()
+	handler := writeGoFile(t, dir, "handler.go", `package main
+
+// @Summary Add device
+// @ID addDevice
+// @Produce json
+// @Success 201 {object} string
+// @Link 201 Read readDevice deviceGuid=$response.body#/guid
+// @Router /api/v1/device [post]
+func AddDevice() {}
+
+// @Summary Read device by guid
+// @ID readDevice
+// @Produce json
+// @Success 200 {object} string
+// @Router /api/v1/device/guid/{deviceGuid} [get]
+func ReadByGuid() {}
+
+// @Summary Read device by id
+// @ID readDevice
+// @Produce json
+// @Success 200 {object} string
+// @Router /api/v1/device/id/{id} [get]
+func ReadById() {}
+`)
+	g := New(Config{Title: "t", Version: "1", ScanPatterns: []string{handler}, TypeDirs: []string{dir}})
+	g.Generate()
+
+	found := false
+	for _, w := range g.Warnings {
+		if strings.Contains(w, "readDevice") && strings.Contains(w, "which one it means") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("an ambiguous link target was not reported: %q", g.Warnings)
+	}
+}
+
+// A link hung off a `default` response reaches it, because `default` is a response.
+func TestBuildPathItem_LinkOnADefaultResponse(t *testing.T) {
+	tags := newTagSet()
+	tags.add("Summary", "Retry job")
+	tags.add("ID", "retryJob")
+	tags.add("Produce", "json")
+	tags.add("Success", "default {object} string")
+	tags.add("Link", "default Detail readJob id=$response.body#/id")
+
+	reg := newSchemaRegistry(nil)
+	item := buildPathItem("/api/v1/job/{id}/retry", tags, reg)
+
+	if got := item.Responses["default"].Links["Detail"].OperationID; got != "readJob" {
+		t.Errorf("a link on a default response was not attached: %v", item.Responses["default"])
+	}
+	for _, w := range reg.warnings {
+		if strings.Contains(w, "Detail") {
+			t.Errorf("attaching to a declared default response should warn about nothing: %q", w)
+		}
 	}
 }
