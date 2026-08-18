@@ -22,12 +22,12 @@ type Config struct {
 
 // Parameter represents an OpenAPI parameter (path, query, or header).
 type Parameter struct {
-	Name        string            `json:"name" yaml:"name"`
-	In          string            `json:"in" yaml:"in"`
-	Description string            `json:"description,omitempty" yaml:"description,omitempty"`
-	Required    bool              `json:"required" yaml:"required"`
-	Schema      map[string]string `json:"schema,omitempty" yaml:"schema,omitempty"`
-	Example     interface{}       `json:"example,omitempty" yaml:"example,omitempty"`
+	Name        string                 `json:"name" yaml:"name"`
+	In          string                 `json:"in" yaml:"in"`
+	Description string                 `json:"description,omitempty" yaml:"description,omitempty"`
+	Required    bool                   `json:"required" yaml:"required"`
+	Schema      map[string]interface{} `json:"schema,omitempty" yaml:"schema,omitempty"`
+	Example     interface{}            `json:"example,omitempty" yaml:"example,omitempty"`
 }
 
 // RequestBody represents an OpenAPI request body.
@@ -62,10 +62,4 @@ type PathItem struct {
 	Parameters  []Parameter         `json:"parameters,omitempty" yaml:"parameters,omitempty"`
 	RequestBody *RequestBody        `json:"requestBody,omitempty" yaml:"requestBody,omitempty"`
 	Responses   map[string]Response `json:"responses,omitempty" yaml:"responses,omitempty"`
-}
-
-type fieldTypeInfo struct {
-	Schema   map[string]interface{}
-	Ref      string
-	Optional bool
 }

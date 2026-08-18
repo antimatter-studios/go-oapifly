@@ -7,7 +7,6 @@ import (
 	"go/parser"
 	"go/token"
 	"os"
-	"reflect"
 	"strconv"
 	"strings"
 )
@@ -225,17 +224,85 @@ func dataTypeToFormat(dataType string) string {
 	return ""
 }
 
-// dataTypeSchema builds a Parameter.Schema map for a swaggo data type.
-func dataTypeSchema(dataType string) map[string]string {
-	schema := map[string]string{"type": dataTypeToOpenAPIType(dataType)}
+// arrayItemType reports the element type of a list-shaped @Param data type, and whether
+// it was one. Both spellings are accepted: Go's `[]int`, and swaggo's bare `array`, whose
+// items are strings because that is all the annotation can say.
+func arrayItemType(dataType string) (string, bool) {
+	switch {
+	case strings.HasPrefix(dataType, "[]"):
+		return dataType[len("[]"):], true
+	case strings.EqualFold(dataType, "array"):
+		return "string", true
+	}
+	return "", false
+}
+
+// dataTypeSchema builds a Parameter.Schema map for a swaggo data type. A list-shaped
+// type becomes an array schema with typed items; anything else is the scalar it names.
+func dataTypeSchema(dataType string) map[string]interface{} {
+	if item, ok := arrayItemType(dataType); ok {
+		return map[string]interface{}{"type": "array", "items": dataTypeSchema(item)}
+	}
+	schema := map[string]interface{}{"type": dataTypeToOpenAPIType(dataType)}
 	if f := dataTypeToFormat(dataType); f != "" {
 		schema["format"] = f
 	}
 	return schema
 }
 
-// isStructRef returns true if the data type refers to a struct (not a primitive).
+// parameterExample turns the text of an example(...) attribute into a value of the
+// declared type: integers, numbers and booleans parse, a list-shaped type splits its
+// bracketed comma-separated text and types each element. Text that does not parse as
+// the declared type is passed through unchanged rather than dropped, so a wrong example
+// shows up in the output where it can be fixed.
+func parameterExample(dataType, example string) interface{} {
+	if item, ok := arrayItemType(dataType); ok {
+		body := strings.TrimSuffix(strings.TrimPrefix(strings.TrimSpace(example), "["), "]")
+		values := []interface{}{}
+		if strings.TrimSpace(body) == "" {
+			return values
+		}
+		for _, part := range strings.Split(body, ",") {
+			values = append(values, parameterExample(item, strings.TrimSpace(part)))
+		}
+		return values
+	}
+	return typedValue(example, dataTypeToOpenAPIType(dataType))
+}
+
+// typedValue reads annotation text as a value of the OpenAPI type it is meant to be.
+// Annotations are always written as text, so an integer's "3" has to become a number on
+// the way in - a quoted example on an integer field describes a value the field rejects.
+// Integers are read as float64 like numbers, which is the one numeric type JSON has, so
+// a value is the same whether it came from an annotation or from decoding a document.
+// Text that does not parse as the type is returned unchanged rather than dropped, so a
+// wrong value shows up in the output where it can be fixed.
+func typedValue(raw, openapiType string) interface{} {
+	switch openapiType {
+	case "integer":
+		// Parsed as an integer and returned as float64: an integer example must BE an
+		// integer, so "1.5" stays text, but the value is a JSON number like any other.
+		if n, err := strconv.ParseInt(raw, 10, 64); err == nil {
+			return float64(n)
+		}
+	case "number":
+		if n, err := strconv.ParseFloat(raw, 64); err == nil {
+			return n
+		}
+	case "boolean":
+		if b, err := strconv.ParseBool(raw); err == nil {
+			return b
+		}
+	}
+	return raw
+}
+
+// isStructRef returns true if the data type refers to a struct (not a primitive or a
+// list of primitives).
 func isStructRef(dataType string) bool {
+	if item, ok := arrayItemType(dataType); ok {
+		return isStructRef(item)
+	}
 	switch strings.ToLower(dataType) {
 	case "string", "int", "integer", "number", "float", "float64",
 		"bool", "boolean", "file":
@@ -246,170 +313,18 @@ func isStructRef(dataType string) bool {
 }
 
 // ---------------------------------------------------------------------------
-// Reflection-based type mapping (for runtime schema generation)
-// ---------------------------------------------------------------------------
-
-// goKindToJSONType maps a Go reflect.Type to its JSON/OpenAPI type string.
-// Distinguishes integer from number per the OpenAPI spec.
-func goKindToJSONType(t reflect.Type) string {
-	if t.Kind() == reflect.Ptr {
-		t = t.Elem()
-	}
-	switch t.Kind() {
-	case reflect.String:
-		return "string"
-	case reflect.Bool:
-		return "boolean"
-	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
-		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
-		return "integer"
-	case reflect.Float32, reflect.Float64:
-		return "number"
-	case reflect.Slice, reflect.Array:
-		return "array"
-	case reflect.Map, reflect.Struct:
-		return "object"
-	default:
-		return "object"
-	}
-}
-
-// goKindToOpenAPIFormat returns the OpenAPI format hint for a Go type
-// (e.g. "int32", "int64", "float", "double"). Returns "" if no format applies.
-func goKindToOpenAPIFormat(t reflect.Type) string {
-	if t.Kind() == reflect.Ptr {
-		t = t.Elem()
-	}
-	switch t.Kind() {
-	case reflect.Int32:
-		return "int32"
-	case reflect.Int, reflect.Int64:
-		return "int64"
-	case reflect.Float32:
-		return "float"
-	case reflect.Float64:
-		return "double"
-	default:
-		return ""
-	}
-}
-
-// resolveJSONFieldName extracts the JSON field name and options from a struct
-// field's json tag. Returns skip=true for fields tagged with json:"-".
-func resolveJSONFieldName(field reflect.StructField) (name string, omitempty bool, skip bool) {
-	name = field.Name
-	tag, ok := field.Tag.Lookup("json")
-	if !ok {
-		return name, false, false
-	}
-	parts := strings.Split(tag, ",")
-	if parts[0] == "-" {
-		return "", false, true
-	}
-	if parts[0] != "" {
-		name = parts[0]
-	}
-	for _, part := range parts[1:] {
-		if part == "omitempty" {
-			omitempty = true
-			break
-		}
-	}
-	return name, omitempty, false
-}
-
-// resolveFieldTypeReflect resolves a struct field type to OpenAPI type info.
-func resolveFieldTypeReflect(rt reflect.Type) fieldTypeInfo {
-	if rt.Kind() == reflect.Ptr {
-		rt = rt.Elem()
-	}
-	jsonType := goKindToJSONType(rt)
-
-	// Struct → return as schema $ref
-	if rt.Kind() == reflect.Struct && jsonType == "object" {
-		return fieldTypeInfo{Ref: rt.Name()}
-	}
-
-	// Slice/Array → include items with element type
-	if rt.Kind() == reflect.Slice || rt.Kind() == reflect.Array {
-		elemType := rt.Elem()
-		if elemType.Kind() == reflect.Ptr {
-			elemType = elemType.Elem()
-		}
-		items := map[string]interface{}{"type": goKindToJSONType(elemType)}
-		if f := goKindToOpenAPIFormat(elemType); f != "" {
-			items["format"] = f
-		}
-		return fieldTypeInfo{Schema: map[string]interface{}{
-			"type":  "array",
-			"items": items,
-		}}
-	}
-
-	// Primitive → type + optional format
-	schema := map[string]interface{}{"type": jsonType}
-	if f := goKindToOpenAPIFormat(rt); f != "" {
-		schema["format"] = f
-	}
-	return fieldTypeInfo{Schema: schema}
-}
-
-// generateSchemaForTypeReflect generates a JSON Schema map using Go reflection.
-func generateSchemaForTypeReflect(rt reflect.Type) map[string]interface{} {
-	if rt.Kind() == reflect.Ptr {
-		rt = rt.Elem()
-	}
-	props := map[string]interface{}{}
-	required := []string{}
-	for i := 0; i < rt.NumField(); i++ {
-		name, omitempty, skip := resolveJSONFieldName(rt.Field(i))
-		if skip || name == "" {
-			continue
-		}
-		fieldType := resolveFieldTypeReflect(rt.Field(i).Type)
-		props[name] = fieldType.Schema
-		if !omitempty {
-			required = append(required, name)
-		}
-	}
-	return map[string]interface{}{
-		"type":       "object",
-		"properties": props,
-		"required":   required,
-	}
-}
-
-// ---------------------------------------------------------------------------
 // AST-based schema generation
 // ---------------------------------------------------------------------------
 
-// generateSchemaForTypeAST parses a Go source file and generates an OpenAPI
-// schema for the named struct type using its AST. This replaces the broken
-// reflection-based approach since findReflectTypeByName cannot resolve
-// arbitrary types at runtime.
+// generateSchemaForTypeAST reports the schema of the named type when it is declared as a
+// struct in filePath, and nil for anything else - a named string, an alias, an interface,
+// or a name the file does not declare.
 func generateSchemaForTypeAST(typeName, filePath string, reg *schemaRegistry) map[string]interface{} {
-	f, err := parseFile(filePath)
-	if err != nil {
+	schema, isStruct := schemaForNamedTypeAST(typeName, filePath, reg)
+	if !isStruct {
 		return nil
 	}
-	for _, decl := range f.Decls {
-		genDecl, ok := decl.(*ast.GenDecl)
-		if !ok || genDecl.Tok != token.TYPE {
-			continue
-		}
-		for _, spec := range genDecl.Specs {
-			typeSpec, ok := spec.(*ast.TypeSpec)
-			if !ok || typeSpec.Name.Name != typeName {
-				continue
-			}
-			structType, ok := typeSpec.Type.(*ast.StructType)
-			if !ok {
-				continue
-			}
-			return buildSchemaFromStructAST(structType, reg)
-		}
-	}
-	return nil
+	return schema
 }
 
 // schemaForNamedTypeAST resolves a named type declaration to a schema, reporting whether it
@@ -615,20 +530,10 @@ func applyFieldConstraints(schema map[string]interface{}, field *ast.Field) {
 	}
 }
 
-// typedTagValue reads a tag's text as the type the schema declares. Tag values are always
-// written as text, so an integer field's "3" has to become a number on the way in.
+// typedTagValue reads a tag's text as the type the schema declares.
 func typedTagValue(raw string, schema map[string]interface{}) interface{} {
-	switch schema["type"] {
-	case "integer", "number":
-		if n, err := strconv.ParseFloat(raw, 64); err == nil {
-			return n
-		}
-	case "boolean":
-		if b, err := strconv.ParseBool(raw); err == nil {
-			return b
-		}
-	}
-	return raw
+	openapiType, _ := schema["type"].(string)
+	return typedValue(raw, openapiType)
 }
 
 // extractTagValue extracts a specific key's value from a Go struct tag string.
@@ -950,7 +855,7 @@ func buildParameters(routerPath string, params []parsedParam) []Parameter {
 		name := routerPath[open+1 : close]
 
 		desc := "Path parameter '" + name + "'"
-		schema := map[string]string{"type": "string"}
+		schema := map[string]interface{}{"type": "string"}
 		var example interface{} = name
 
 		if meta, ok := pathMeta[name]; ok {
@@ -959,7 +864,7 @@ func buildParameters(routerPath string, params []parsedParam) []Parameter {
 			}
 			schema = dataTypeSchema(meta.DataType)
 			if meta.Example != "" {
-				example = meta.Example
+				example = parameterExample(meta.DataType, meta.Example)
 			}
 		}
 
@@ -987,12 +892,28 @@ func buildParameters(routerPath string, params []parsedParam) []Parameter {
 			Schema:      dataTypeSchema(p.DataType),
 		}
 		if p.Example != "" {
-			param.Example = p.Example
+			param.Example = parameterExample(p.DataType, p.Example)
 		}
 		result = append(result, param)
 	}
 
 	return result
+}
+
+// bodySchema describes a request body's data type: a struct becomes a reference to its
+// registered component, a list of structs an array of such references, and anything else
+// the scalar or list-of-scalars schema the data type names. The slice spelling is peeled
+// off BEFORE the registry sees the name - handing it "[]Item" would register a component
+// by that name and describe the array as a single object.
+func bodySchema(dataType string, reg *schemaRegistry) map[string]interface{} {
+	if item, ok := arrayItemType(dataType); ok {
+		return map[string]interface{}{"type": "array", "items": bodySchema(item, reg)}
+	}
+	if isStructRef(dataType) {
+		refName := reg.resolve(dataType)
+		return map[string]interface{}{"$ref": "#/components/schemas/" + refName}
+	}
+	return dataTypeSchema(dataType)
 }
 
 // buildRequestBody builds an OpenAPI request body from body/formData @Param entries.
@@ -1016,16 +937,7 @@ func buildRequestBody(params []parsedParam, reg *schemaRegistry) *RequestBody {
 
 	if len(bodyParams) > 0 {
 		p := bodyParams[0]
-		var schema map[string]interface{}
-		if isStructRef(p.DataType) {
-			refName := reg.resolve(p.DataType)
-			schema = map[string]interface{}{"$ref": "#/components/schemas/" + refName}
-		} else {
-			schema = map[string]interface{}{"type": dataTypeToOpenAPIType(p.DataType)}
-			if f := dataTypeToFormat(p.DataType); f != "" {
-				schema["format"] = f
-			}
-		}
+		schema := bodySchema(p.DataType, reg)
 		return &RequestBody{
 			Description: p.Description,
 			Required:    p.Required,
@@ -1039,11 +951,7 @@ func buildRequestBody(params []parsedParam, reg *schemaRegistry) *RequestBody {
 	props := map[string]interface{}{}
 	var required []string
 	for _, p := range formParams {
-		s := map[string]interface{}{"type": dataTypeToOpenAPIType(p.DataType)}
-		if f := dataTypeToFormat(p.DataType); f != "" {
-			s["format"] = f
-		}
-		props[p.Name] = s
+		props[p.Name] = dataTypeSchema(p.DataType)
 		if p.Required {
 			required = append(required, p.Name)
 		}
@@ -1343,10 +1251,4 @@ func findTypeFile(typeName string, dirs []string) string {
 		}
 	}
 	return aliasPath
-}
-
-// findReflectTypeByName is a stub for resolving a struct name to reflect.Type.
-// TODO: Implement using a type registry for full schema resolution.
-func findReflectTypeByName(name string) reflect.Type {
-	return nil
 }
