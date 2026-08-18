@@ -153,16 +153,37 @@ func typeParamNames(typeSpec *ast.TypeSpec) []string {
 	return names
 }
 
+// inOwnScope describes another declaration's body with the current generic bindings set
+// aside.
+//
+// A type parameter's name is scoped to the declaration that declares it: a parameter called
+// Item does not change what the type Item means in some other struct. Leaving the binding in
+// place while descending made an ordinary field describe the generic's argument instead of its
+// own type.
+func (r *schemaRegistry) inOwnScope(typeName, typeFile string) (map[string]interface{}, bool) {
+	outer := r.typeArgs
+	r.typeArgs = nil
+	schema, isStruct := schemaForNamedTypeAST(typeName, typeFile, r)
+	r.typeArgs = outer
+	return schema, isStruct
+}
+
 // resolveGeneric registers the schema for an instantiation and returns its component name.
 func (r *schemaRegistry) resolveGeneric(base string, args []string, display string) string {
 	name := genericSchemaName(base, args)
-	if _, known := r.schemas[name]; known {
+
+	// The name drops package qualifiers, so two different instantiations can reduce to one
+	// component. The first one describes both, which is worth knowing about rather than
+	// discovering in the document. Seeing the SAME instantiation again is either a second
+	// reference or the type reaching itself, and both want the name and nothing else.
+	if previous, seen := r.genericOrigins[name]; seen {
+		if previous != display {
+			r.warn("%s and %s reduce to the same component name %s, so %s describes both; qualify or rename one of them",
+				previous, display, name, previous)
+		}
 		return name
 	}
-	if r.resolving[name] {
-		// Reached from its own definition further up the stack; the reference is still correct.
-		return name
-	}
+	r.genericOrigins[name] = display
 
 	shortBase := stripPackagePrefix(base)
 	typeFile := findTypeFile(shortBase, r.typeDirs)
@@ -172,10 +193,7 @@ func (r *schemaRegistry) resolveGeneric(base string, args []string, display stri
 		return name
 	}
 
-	r.resolving[name] = true
 	schema := r.schemaForInstantiation(shortBase, args, typeFile, display)
-	delete(r.resolving, name)
-
 	if schema == nil {
 		schema = map[string]interface{}{"type": "object"}
 	}

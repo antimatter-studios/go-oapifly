@@ -63,13 +63,19 @@ type schemaRegistry struct {
 	// typeArgs binds the type parameters of the generic declaration currently being
 	// described to the arguments it was instantiated with. Empty everywhere else.
 	typeArgs map[string]typeArg
+
+	// genericOrigins records which instantiation produced each generic component name, so a
+	// second instantiation reducing to the same name is reported rather than silently
+	// answered by the first one's schema. It doubles as the recursion guard for generics.
+	genericOrigins map[string]string
 }
 
 func newSchemaRegistry(typeDirs []string) *schemaRegistry {
 	return &schemaRegistry{
-		schemas:   map[string]map[string]interface{}{},
-		typeDirs:  typeDirs,
-		resolving: map[string]bool{},
+		schemas:        map[string]map[string]interface{}{},
+		typeDirs:       typeDirs,
+		resolving:      map[string]bool{},
+		genericOrigins: map[string]string{},
 	}
 }
 
@@ -119,7 +125,7 @@ func (r *schemaRegistry) resolve(refType string) string {
 	// string, an alias to another package's type - is described as what it is rather than
 	// abandoned. Describing `type DeviceType string` as an object rejects the plain string
 	// the handler sends.
-	schema, _ := schemaForNamedTypeAST(shortName, typeFile, r)
+	schema, _ := r.inOwnScope(shortName, typeFile)
 	if schema == nil {
 		r.warn("type %s in %s has no schema this generator can express, described as an untyped object", refType, typeFile)
 		schema = map[string]interface{}{"type": "object"}
@@ -393,7 +399,7 @@ func (r *schemaRegistry) embeddedFields(expr ast.Expr) (map[string]interface{}, 
 	}
 
 	r.resolving[name] = true
-	schema, isStruct := schemaForNamedTypeAST(name, typeFile, r)
+	schema, isStruct := r.inOwnScope(name, typeFile)
 	delete(r.resolving, name)
 
 	if !isStruct || schema == nil {
@@ -704,7 +710,7 @@ func (r *schemaRegistry) refOrObject(typeName, displayName string) map[string]in
 	}
 
 	r.resolving[typeName] = true
-	schema, isStruct := schemaForNamedTypeAST(typeName, typeFile, r)
+	schema, isStruct := r.inOwnScope(typeName, typeFile)
 	delete(r.resolving, typeName)
 
 	if schema == nil {

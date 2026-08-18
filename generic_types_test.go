@@ -637,3 +637,82 @@ func TestGenericFieldSchema_UnnameableBaseWarns(t *testing.T) {
 		t.Errorf("the gap was not reported: %q", reg.warnings)
 	}
 }
+
+// A type parameter's name is scoped to its own declaration. A parameter called Item does not
+// change what the type Item means anywhere else, and binding it registry-wide made an
+// ordinary struct's field describe the generic's argument instead of its own type.
+func TestResolveGenericInstantiation_BindingDoesNotLeakIntoOtherDeclarations(t *testing.T) {
+	dir := t.TempDir()
+	writeGoFile(t, dir, "types.go", `package types
+
+type Item struct {
+	Name string `+"`json:\"name\"`"+`
+}
+
+type Thing struct {
+	Size int `+"`json:\"size\"`"+`
+}
+
+// Meta has a field of the ordinary type Item.
+type Meta struct {
+	Item Item `+"`json:\"item\"`"+`
+}
+
+// The parameter is deliberately named Item too, shadowing the type inside this body only.
+type Envelope[Item any] struct {
+	Data []Item `+"`json:\"data\"`"+`
+	Meta Meta   `+"`json:\"meta\"`"+`
+}
+`)
+	reg := newSchemaRegistry([]string{dir})
+	name := reg.resolve("Envelope[Thing]")
+
+	// Inside the envelope, Item is the argument.
+	data := propOf(t, reg.schemas[name], "data")
+	items, _ := data["items"].(map[string]interface{})
+	if items["$ref"] != "#/components/schemas/Thing" {
+		t.Errorf("data items should reference the argument Thing, got %#v", items)
+	}
+
+	// Inside Meta, which is its own declaration, Item is the type Item.
+	meta, ok := reg.schemas["Meta"]
+	if !ok {
+		t.Fatalf("Meta was not registered; have %v", keysOf(reg.schemas))
+	}
+	if got := refOf(t, meta, "item"); got != "#/components/schemas/Item" {
+		t.Errorf("Meta.item should reference Item, got %q - the binding leaked out of the generic", got)
+	}
+}
+
+// Two different instantiations can reduce to the same component name, because the name drops
+// package qualifiers. The first one then describes both, and that is said rather than left to
+// be discovered in the document.
+func TestResolveGenericInstantiation_CollidingNamesWarn(t *testing.T) {
+	dir := t.TempDir()
+	writeGoFile(t, dir, "types.go", `package types
+
+type Item struct {
+	Name string `+"`json:\"name\"`"+`
+}
+
+type Page[T any] struct {
+	Data []T `+"`json:\"data\"`"+`
+}
+`)
+	reg := newSchemaRegistry([]string{dir})
+
+	first := reg.resolve("Page[Item]")
+	second := reg.resolve("Page[other.Item]")
+	if first != second {
+		t.Fatalf("the two instantiations should reduce to one name, got %q and %q", first, second)
+	}
+	found := false
+	for _, w := range reg.warnings {
+		if strings.Contains(w, "same component") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("the collision was not reported: %q", reg.warnings)
+	}
+}
