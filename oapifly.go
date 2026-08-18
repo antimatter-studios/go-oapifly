@@ -141,6 +141,10 @@ func (g *Generator) Generate() map[string]interface{} {
 		}
 	}
 
+	// A link's target can only be checked once every operation has been read, since an
+	// operation may be linked to from a file parsed before its own.
+	reportUnknownLinkTargets(paths, reg.warn)
+
 	// Types the registry could not describe are reported to the caller rather than left in
 	// the spec as unexplained untyped objects, so a missing TypeDirs entry is visible at
 	// generation time instead of surfacing later as a contract test that cannot fail.

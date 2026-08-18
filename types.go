@@ -50,6 +50,17 @@ type Example struct {
 type Response struct {
 	Description string                 `json:"description" yaml:"description"`
 	Content     map[string]interface{} `json:"content,omitempty" yaml:"content,omitempty"`
+	// Links are omitted when empty on purpose: a response with no links and a response with an
+	// empty links object are different documents, and only the first is true when none were
+	// declared.
+	Links map[string]Link `json:"links,omitempty" yaml:"links,omitempty"`
+}
+
+// Link represents an OpenAPI Link Object: a named step from this response to another operation,
+// with the target's parameters filled from runtime expressions over this exchange.
+type Link struct {
+	OperationID string            `json:"operationId" yaml:"operationId"`
+	Parameters  map[string]string `json:"parameters,omitempty" yaml:"parameters,omitempty"`
 }
 
 // PathItem represents an OpenAPI path entry.

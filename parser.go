@@ -1306,6 +1306,15 @@ func buildPathItem(routerPath string, tags tagSet, reg *schemaRegistry) PathItem
 		}
 	}
 
+	// Links are attached after the responses exist, since a link hangs off one of them.
+	if linkTags := tags.getAll("Link"); len(linkTags) > 0 {
+		operation := routerPath
+		if id := tags.get("ID"); id != "" {
+			operation = id
+		}
+		attachLinks(responses, linkTags, operation, reg)
+	}
+
 	var examples []parsedExample
 	for _, v := range tags.getAll("Example") {
 		if example, ok := parseExample(v); ok {
