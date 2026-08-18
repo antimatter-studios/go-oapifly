@@ -127,3 +127,63 @@ func TestBuildParameters_NonNumericBoundIsDropped(t *testing.T) {
 		t.Errorf("a bound that is not a number should be left off, got %#v", result[0].Schema)
 	}
 }
+
+// The annotation path's type map was less complete than the AST path's: an int64 parameter was
+// described as a string, so a consumer sent "1" where the handler wanted a number, and any
+// bound declared on it was dropped for not being a value of the schema's type.
+func TestDataTypeToOpenAPIType_NumericAliases(t *testing.T) {
+	for _, dataType := range []string{"int8", "int16", "int32", "int64", "uint", "uint8", "uint16", "uint32", "uint64"} {
+		t.Run(dataType, func(t *testing.T) {
+			if got := dataTypeToOpenAPIType(dataType); got != "integer" {
+				t.Errorf("dataTypeToOpenAPIType(%q) = %q, want integer", dataType, got)
+			}
+		})
+	}
+	if got := dataTypeToOpenAPIType("float32"); got != "number" {
+		t.Errorf("dataTypeToOpenAPIType(float32) = %q, want number", got)
+	}
+}
+
+func TestBuildParameters_BoundsOnANumericAlias(t *testing.T) {
+	params := []parsedParam{
+		{Name: "id", In: "path", DataType: "int64", Required: true, Minimum: "1"},
+	}
+	result := buildParameters("/api/v1/things/{id}", params)
+	if result[0].Schema["type"] != "integer" {
+		t.Fatalf("an int64 parameter should be an integer, got %#v", result[0].Schema)
+	}
+	if result[0].Schema["minimum"] != float64(1) {
+		t.Errorf("minimum = %#v, want the number 1", result[0].Schema["minimum"])
+	}
+}
+
+// An enum entry that is not a value of the parameter's type leaves the whole enum off.
+//
+// Keeping the entries that did parse would describe the parameter as forbidding whichever
+// value the mistyped entry meant - if enums(1,two,3) was a typo for 2, a schema of {1,3}
+// rejects the 2 the handler accepts. An unconstrained integer is less precise and never wrong.
+func TestBuildParameters_EnumWithAnUntypeableEntryIsDropped(t *testing.T) {
+	params := []parsedParam{
+		{Name: "priority", In: "query", DataType: "int", Enums: []string{"1", "two", "3"}},
+	}
+	result := buildParameters("/api/v1/things", params)
+	if enum, present := result[0].Schema["enum"]; present {
+		t.Errorf("the enum should have been left off entirely, got %#v", enum)
+	}
+}
+
+func TestBuildParameters_NumericEnumIsTyped(t *testing.T) {
+	params := []parsedParam{
+		{Name: "priority", In: "query", DataType: "int", Enums: []string{"1", "2", "3"}},
+	}
+	result := buildParameters("/api/v1/things", params)
+	enum, ok := result[0].Schema["enum"].([]interface{})
+	if !ok || len(enum) != 3 {
+		t.Fatalf("enum = %#v, want three numbers", result[0].Schema["enum"])
+	}
+	for i, want := range []float64{1, 2, 3} {
+		if enum[i] != want {
+			t.Errorf("enum[%d] = %#v, want %v", i, enum[i], want)
+		}
+	}
+}

@@ -257,7 +257,15 @@ func applyParamConstraints(schema map[string]interface{}, p parsedParam) {
 	if len(p.Enums) > 0 {
 		values := make([]interface{}, 0, len(p.Enums))
 		for _, entry := range p.Enums {
-			values = append(values, typedValue(entry, openapiType))
+			value := typedValue(entry, openapiType)
+			if value == entry && openapiType != "string" {
+				// One entry is not a value of this type, so the annotation is wrong about the
+				// set. Keeping the rest would describe the parameter as forbidding whichever
+				// value the mistyped one meant, which rejects input the handler accepts; an
+				// unconstrained parameter is less precise and never wrong.
+				return
+			}
+			values = append(values, value)
 		}
 		schema["enum"] = values
 	}
@@ -281,9 +289,14 @@ func parseAllParams(paramTags []string) []parsedParam {
 // dataTypeToOpenAPIType converts a swaggo data type to an OpenAPI type string.
 func dataTypeToOpenAPIType(dataType string) string {
 	switch strings.ToLower(dataType) {
-	case "int", "integer":
+	// The sized and unsigned spellings are here because an annotation carries whatever the
+	// handler's own signature says. Without them an int64 parameter was described as a string,
+	// so a consumer sent "1" where a number was wanted, and any bound declared on it was
+	// dropped for not being a value of the schema's type.
+	case "int", "integer", "int8", "int16", "int32", "int64",
+		"uint", "uint8", "uint16", "uint32", "uint64":
 		return "integer"
-	case "number", "float", "float64":
+	case "number", "float", "float32", "float64":
 		return "number"
 	case "bool", "boolean":
 		return "boolean"
