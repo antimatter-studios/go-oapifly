@@ -11,6 +11,7 @@ Unlike traditional OpenAPI tools that generate code *from* a spec, oapifly works
 - **JSON and YAML output** - Serialize the spec in either format
 - **Schema extraction** - Automatically generates JSON Schema from Go struct types
 - **Generic types** - A generic envelope named in an annotation is described with its type parameters substituted
+- **Links** - Declare that a response leads to another operation, so a consumer can follow a create to its read
 - **Framework agnostic** - Pure Go, no HTTP framework dependency. Wire it into any router yourself
 - **Zero config defaults** - Just point it at your source files
 
@@ -75,6 +76,43 @@ func (c *UserController) GetUser(ctx *fiber.Ctx) error {
 ```
 
 oapifly will parse these annotations and produce the corresponding OpenAPI path entries, parameters, and response schemas.
+
+### Links
+
+A link says that one operation's response leads to another, and where the target's parameters
+come from. It is what lets a consumer follow a create to the read of the thing it created —
+and the only way a description can state a lifecycle rather than a set of unrelated calls.
+
+```go
+// @ID      addDevice
+// @Success 201 {object} restclient.MessageResponse
+// @Link    201 Read   readDevice   deviceGuid=$response.body#/guid
+// @Link    201 Remove removeDevice deviceGuid=$response.body#/guid
+```
+
+produces, on that response:
+
+```yaml
+responses:
+  "201":
+    links:
+      Read:
+        operationId: readDevice
+        parameters: {deviceGuid: "$response.body#/guid"}
+```
+
+The form is `@Link <status> <name> <targetOperationId> [<param>=<expression> ...]`. The status
+must be a response the operation declares; the name is free-form and appears verbatim in a
+consumer's reports, so it should name the step; the target is an `@ID` declared somewhere in the
+same document. Expressions — `$response.body#/guid`, `$request.path.id`,
+`$response.header.Location`, `$statusCode` — are passed through untouched, because they are
+evaluated by whoever follows the link.
+
+Nothing is inferred. Pairing `POST /device` with `GET /device/guid/{deviceGuid}` because they
+look related would mint chains the author never claimed, so a link exists only where an `@Link`
+says so. A link on a status the operation does not declare, one this generator cannot read, and
+one whose target no operation declares are each reported rather than guessed at, and a response
+with no links carries no `links` key at all.
 
 ### Parameter constraints
 
