@@ -279,7 +279,13 @@ func parameterExample(dataType, example string) interface{} {
 // wrong value shows up in the output where it can be fixed.
 func typedValue(raw, openapiType string) interface{} {
 	switch openapiType {
-	case "integer", "number":
+	case "integer":
+		// Parsed as an integer and returned as float64: an integer example must BE an
+		// integer, so "1.5" stays text, but the value is a JSON number like any other.
+		if n, err := strconv.ParseInt(raw, 10, 64); err == nil {
+			return float64(n)
+		}
+	case "number":
 		if n, err := strconv.ParseFloat(raw, 64); err == nil {
 			return n
 		}
@@ -894,6 +900,22 @@ func buildParameters(routerPath string, params []parsedParam) []Parameter {
 	return result
 }
 
+// bodySchema describes a request body's data type: a struct becomes a reference to its
+// registered component, a list of structs an array of such references, and anything else
+// the scalar or list-of-scalars schema the data type names. The slice spelling is peeled
+// off BEFORE the registry sees the name - handing it "[]Item" would register a component
+// by that name and describe the array as a single object.
+func bodySchema(dataType string, reg *schemaRegistry) map[string]interface{} {
+	if item, ok := arrayItemType(dataType); ok {
+		return map[string]interface{}{"type": "array", "items": bodySchema(item, reg)}
+	}
+	if isStructRef(dataType) {
+		refName := reg.resolve(dataType)
+		return map[string]interface{}{"$ref": "#/components/schemas/" + refName}
+	}
+	return dataTypeSchema(dataType)
+}
+
 // buildRequestBody builds an OpenAPI request body from body/formData @Param entries.
 // Returns nil if no body or formData params are present.
 func buildRequestBody(params []parsedParam, reg *schemaRegistry) *RequestBody {
@@ -915,13 +937,7 @@ func buildRequestBody(params []parsedParam, reg *schemaRegistry) *RequestBody {
 
 	if len(bodyParams) > 0 {
 		p := bodyParams[0]
-		var schema map[string]interface{}
-		if isStructRef(p.DataType) {
-			refName := reg.resolve(p.DataType)
-			schema = map[string]interface{}{"$ref": "#/components/schemas/" + refName}
-		} else {
-			schema = dataTypeSchema(p.DataType)
-		}
+		schema := bodySchema(p.DataType, reg)
 		return &RequestBody{
 			Description: p.Description,
 			Required:    p.Required,

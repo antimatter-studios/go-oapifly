@@ -2,6 +2,7 @@ package oapifly
 
 import (
 	"encoding/json"
+	"os"
 	"reflect"
 	"testing"
 )
@@ -154,5 +155,53 @@ func TestTypedValue_SharedBetweenTagsAndParams(t *testing.T) {
 	fromTag := typedTagValue("3", map[string]interface{}{"type": "integer"})
 	if !reflect.DeepEqual(fromParam, fromTag) {
 		t.Errorf("parameter example %#v and tag value %#v disagree on the same text", fromParam, fromTag)
+	}
+}
+
+// A body declared as a list of structs is an array whose items reference the struct, not a
+// component named "[]Item". Classifying the slice as a struct reference and passing the
+// slice spelling to the registry looked up a type that cannot exist.
+func TestBuildRequestBody_BodyArrayOfStructRefsItems(t *testing.T) {
+	dir := t.TempDir()
+	src := "package types\n\ntype Item struct {\n\tName string `json:\"name\"`\n}\n"
+	if err := os.WriteFile(dir+"/item.go", []byte(src), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	reg := newSchemaRegistry([]string{dir})
+	params := []parsedParam{
+		{Name: "items", In: "body", DataType: "[]Item", Required: true},
+	}
+	rb := buildRequestBody(params, reg)
+	if rb == nil {
+		t.Fatal("expected non-nil")
+	}
+	content := rb.Content["application/json"].(map[string]interface{})
+	schema := content["schema"].(map[string]interface{})
+	if schema["type"] != "array" {
+		t.Fatalf("schema = %v, want an array", schema)
+	}
+	items, _ := schema["items"].(map[string]interface{})
+	if items["$ref"] != "#/components/schemas/Item" {
+		t.Errorf("items = %v, want a $ref to Item", items)
+	}
+	if _, registered := reg.schemas["Item"]; !registered {
+		t.Error("Item was not registered as a component")
+	}
+	if _, bogus := reg.schemas["[]Item"]; bogus {
+		t.Error("a component named []Item was registered")
+	}
+}
+
+// An integer example that is not an integer stays visibly wrong rather than being quietly
+// read as a number beside an integer schema.
+func TestTypedValue_IntegerRejectsFraction(t *testing.T) {
+	if got := typedValue("1.5", "integer"); got != "1.5" {
+		t.Errorf("typedValue(\"1.5\", integer) = %#v, want the text passed through", got)
+	}
+	if got := typedValue("2", "integer"); got != float64(2) {
+		t.Errorf("typedValue(\"2\", integer) = %#v, want float64(2)", got)
+	}
+	if got := typedValue("1.5", "number"); got != 1.5 {
+		t.Errorf("typedValue(\"1.5\", number) = %#v, want 1.5", got)
 	}
 }
