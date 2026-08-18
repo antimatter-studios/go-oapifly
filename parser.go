@@ -153,6 +153,11 @@ func openAPIPrimitiveSchema(name string) (map[string]interface{}, bool) {
 // ---------------------------------------------------------------------------
 
 // parsedParam is the structured result of parsing a single @Param annotation.
+//
+// The bounds are kept as the text they were written as and typed when they join a schema, the
+// same way a struct tag's constraint is: an annotation can only carry text, and a bound beside
+// an integer has to become a number or it would describe a parameter that rejects every value
+// it accepts.
 type parsedParam struct {
 	Name        string
 	In          string // path, query, header, body, formData
@@ -160,10 +165,17 @@ type parsedParam struct {
 	Required    bool
 	Description string
 	Example     string
+	Minimum     string
+	Maximum     string
+	Enums       []string
 }
 
 // parseParam parses a single @Param tag value into structured data.
-// Format: name location dataType required "description" [example(...)]
+// Format: name location dataType required "description" [attribute(value)...]
+//
+// The attributes are swaggo's: example, minimum, maximum and enums. A Go type says what shape
+// a value has, not which values are allowed, so where a handler enforces a bound these are how
+// the description states it.
 func parseParam(value string) (parsedParam, bool) {
 	parts := strings.Fields(value)
 	if len(parts) < 4 {
@@ -185,12 +197,28 @@ func parseParam(value string) (parsedParam, bool) {
 		}
 	}
 
-	// Extract example from attributes
+	// Extract the attributes
 	for i := 4; i < len(parts); i++ {
 		part := parts[i]
-		if strings.HasPrefix(part, "example(") && strings.HasSuffix(part, ")") {
-			p.Example = part[len("example(") : len(part)-1]
-		} else if part == "example" && i+1 < len(parts) {
+		if name, value, ok := parseAttribute(part); ok {
+			switch name {
+			case "example":
+				p.Example = value
+			case "minimum":
+				p.Minimum = value
+			case "maximum":
+				p.Maximum = value
+			case "enums":
+				for _, entry := range strings.Split(value, ",") {
+					if entry = strings.TrimSpace(entry); entry != "" {
+						p.Enums = append(p.Enums, entry)
+					}
+				}
+			}
+			continue
+		}
+		// swaggo also writes an example as `example "value"`.
+		if part == "example" && i+1 < len(parts) {
 			next := parts[i+1]
 			if strings.HasPrefix(next, "\"") && strings.HasSuffix(next, "\"") && len(next) > 1 {
 				p.Example = next[1 : len(next)-1]
@@ -199,6 +227,40 @@ func parseParam(value string) (parsedParam, bool) {
 	}
 
 	return p, true
+}
+
+// parseAttribute reads one `name(value)` attribute.
+func parseAttribute(part string) (name, value string, ok bool) {
+	open := strings.Index(part, "(")
+	if open <= 0 || !strings.HasSuffix(part, ")") {
+		return "", "", false
+	}
+	return part[:open], part[open+1 : len(part)-1], true
+}
+
+// applyParamConstraints puts the bounds an annotation declared into a parameter's schema,
+// typed as the schema is. A bound that is not a value of that type is left off rather than
+// written as text: describing a parameter as accepting only the string "one" would reject
+// every number it really takes, and the annotation is what needs fixing.
+func applyParamConstraints(schema map[string]interface{}, p parsedParam) {
+	openapiType, _ := schema["type"].(string)
+
+	for key, raw := range map[string]string{"minimum": p.Minimum, "maximum": p.Maximum} {
+		if raw == "" {
+			continue
+		}
+		if value := typedValue(raw, openapiType); value != raw {
+			schema[key] = value
+		}
+	}
+
+	if len(p.Enums) > 0 {
+		values := make([]interface{}, 0, len(p.Enums))
+		for _, entry := range p.Enums {
+			values = append(values, typedValue(entry, openapiType))
+		}
+		schema["enum"] = values
+	}
 }
 
 // parseAllParams parses all @Param tag values.
@@ -899,6 +961,7 @@ func buildParameters(routerPath string, params []parsedParam) []Parameter {
 				desc = meta.Description
 			}
 			schema = dataTypeSchema(meta.DataType)
+			applyParamConstraints(schema, meta)
 			if meta.Example != "" {
 				example = parameterExample(meta.DataType, meta.Example)
 			}
@@ -920,12 +983,14 @@ func buildParameters(routerPath string, params []parsedParam) []Parameter {
 		if p.In != "query" && p.In != "header" {
 			continue
 		}
+		schema := dataTypeSchema(p.DataType)
+		applyParamConstraints(schema, p)
 		param := Parameter{
 			Name:        p.Name,
 			In:          p.In,
 			Description: p.Description,
 			Required:    p.Required,
-			Schema:      dataTypeSchema(p.DataType),
+			Schema:      schema,
 		}
 		if p.Example != "" {
 			param.Example = parameterExample(p.DataType, p.Example)
