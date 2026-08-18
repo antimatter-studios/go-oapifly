@@ -59,13 +59,23 @@ type schemaRegistry struct {
 	// resolving guards against a type that reaches itself - a tree node with
 	// child nodes of its own type would otherwise recurse until the stack ends.
 	resolving map[string]bool
+
+	// typeArgs binds the type parameters of the generic declaration currently being
+	// described to the arguments it was instantiated with. Empty everywhere else.
+	typeArgs map[string]typeArg
+
+	// genericOrigins records which instantiation produced each generic component name, so a
+	// second instantiation reducing to the same name is reported rather than silently
+	// answered by the first one's schema. It doubles as the recursion guard for generics.
+	genericOrigins map[string]string
 }
 
 func newSchemaRegistry(typeDirs []string) *schemaRegistry {
 	return &schemaRegistry{
-		schemas:   map[string]map[string]interface{}{},
-		typeDirs:  typeDirs,
-		resolving: map[string]bool{},
+		schemas:        map[string]map[string]interface{}{},
+		typeDirs:       typeDirs,
+		resolving:      map[string]bool{},
+		genericOrigins: map[string]string{},
 	}
 }
 
@@ -87,6 +97,12 @@ func stripPackagePrefix(refType string) string {
 // stripping the package prefix for file/AST lookup while preserving the full
 // name as the schema key.
 func (r *schemaRegistry) resolve(refType string) string {
+	// A generic instantiation names no declaration of its own - the file declares the base
+	// and the arguments arrive beside it - so it is resolved by binding rather than lookup.
+	if base, args, ok := parseGenericName(refType); ok {
+		return r.resolveGeneric(base, args, refType)
+	}
+
 	refName := strings.TrimPrefix(refType, "types.")
 	if _, known := r.schemas[refName]; known {
 		return refName
@@ -109,7 +125,7 @@ func (r *schemaRegistry) resolve(refType string) string {
 	// string, an alias to another package's type - is described as what it is rather than
 	// abandoned. Describing `type DeviceType string` as an object rejects the plain string
 	// the handler sends.
-	schema, _ := schemaForNamedTypeAST(shortName, typeFile, r)
+	schema, _ := r.inOwnScope(shortName, typeFile)
 	if schema == nil {
 		r.warn("type %s in %s has no schema this generator can express, described as an untyped object", refType, typeFile)
 		schema = map[string]interface{}{"type": "object"}
@@ -383,7 +399,7 @@ func (r *schemaRegistry) embeddedFields(expr ast.Expr) (map[string]interface{}, 
 	}
 
 	r.resolving[name] = true
-	schema, isStruct := schemaForNamedTypeAST(name, typeFile, r)
+	schema, isStruct := r.inOwnScope(name, typeFile)
 	delete(r.resolving, name)
 
 	if !isStruct || schema == nil {
@@ -587,11 +603,22 @@ var qualifiedJSONTypes = map[string]map[string]interface{}{
 func resolveFieldTypeAST(expr ast.Expr, reg *schemaRegistry) map[string]interface{} {
 	switch t := expr.(type) {
 	case *ast.Ident:
+		// A bound type parameter is whatever it was instantiated with, checked before the
+		// primitives so a parameter can be named anything at all.
+		if arg, bound := reg.typeArgs[t.Name]; bound {
+			return copySchema(arg.schema)
+		}
 		if primitive := goIdentToOpenAPIType(t.Name); primitive != "object" {
 			return map[string]interface{}{"type": primitive}
 		}
 		// A non-primitive identifier is a type declared in this package.
 		return reg.refOrObject(t.Name, t.Name)
+	case *ast.IndexExpr:
+		// A generic instantiation with one argument: Page[Item].
+		return reg.genericFieldSchema(t.X, []ast.Expr{t.Index})
+	case *ast.IndexListExpr:
+		// ... and with several: Pair[string, Item].
+		return reg.genericFieldSchema(t.X, t.Indices)
 	case *ast.StarExpr:
 		// A pointer is the same type, absent-able: OpenAPI 3.0 spells that nullable.
 		return asNullable(resolveFieldTypeAST(t.X, reg))
@@ -683,7 +710,7 @@ func (r *schemaRegistry) refOrObject(typeName, displayName string) map[string]in
 	}
 
 	r.resolving[typeName] = true
-	schema, isStruct := schemaForNamedTypeAST(typeName, typeFile, r)
+	schema, isStruct := r.inOwnScope(typeName, typeFile)
 	delete(r.resolving, typeName)
 
 	if schema == nil {
