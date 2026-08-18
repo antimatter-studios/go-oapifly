@@ -22,10 +22,10 @@ type Config struct {
 
 // Parameter represents an OpenAPI parameter (path, query, or header).
 type Parameter struct {
-	Name        string            `json:"name" yaml:"name"`
-	In          string            `json:"in" yaml:"in"`
-	Description string            `json:"description,omitempty" yaml:"description,omitempty"`
-	Required    bool              `json:"required" yaml:"required"`
+	Name        string                 `json:"name" yaml:"name"`
+	In          string                 `json:"in" yaml:"in"`
+	Description string                 `json:"description,omitempty" yaml:"description,omitempty"`
+	Required    bool                   `json:"required" yaml:"required"`
 	Schema      map[string]interface{} `json:"schema,omitempty" yaml:"schema,omitempty"`
 	Example     interface{}            `json:"example,omitempty" yaml:"example,omitempty"`
 }
