@@ -363,6 +363,15 @@ func schemaForNamedTypeAST(typeName, filePath string, reg *schemaRegistry) (sche
 			if !ok || typeSpec.Name.Name != typeName {
 				continue
 			}
+			// A generic declaration reached by its bare name has nothing for its parameters to
+			// stand for. Describing it anyway resolved each parameter as if it were a type, and
+			// the reader was sent looking for a type called T; an instantiation reaches its body
+			// through resolveGeneric instead, with the arguments bound.
+			if params := typeParamNames(typeSpec); len(params) > 0 && len(reg.typeArgs) == 0 {
+				reg.warn("%s declares type parameter(s) %s, so it cannot be described without arguments; name an instantiation such as %s[...]",
+					typeName, strings.Join(params, ", "), typeName)
+				return nil, false
+			}
 			if structType, ok := typeSpec.Type.(*ast.StructType); ok {
 				return buildSchemaFromStructAST(structType, reg), true
 			}

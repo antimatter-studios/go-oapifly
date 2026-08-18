@@ -716,3 +716,32 @@ type Page[T any] struct {
 		t.Errorf("the collision was not reported: %q", reg.warnings)
 	}
 }
+
+// Naming a generic type without its arguments cannot be described - the parameters have
+// nothing to stand for. The message has to say that, rather than report the parameter as a
+// type nobody can find, which is what a reader would then go looking for.
+func TestResolveBareGenericName_SaysItNeedsArguments(t *testing.T) {
+	reg := genericRegistry(t)
+	name := reg.resolve("Page")
+
+	if schema := reg.schemas[name]; schema["properties"] != nil {
+		t.Errorf("a bare generic name should not be described, got %#v", schema)
+	}
+	if len(reg.warnings) == 0 {
+		t.Fatal("naming a generic without arguments must be warned about")
+	}
+	for _, w := range reg.warnings {
+		if strings.Contains(w, "type T is not in any configured TypeDirs") {
+			t.Errorf("the warning blames the type parameter instead of the missing arguments: %q", w)
+		}
+	}
+	found := false
+	for _, w := range reg.warnings {
+		if strings.Contains(w, "Page") && strings.Contains(w, "type parameter") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("no warning explained that arguments are needed: %q", reg.warnings)
+	}
+}
