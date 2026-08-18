@@ -239,19 +239,28 @@ func parseAttribute(part string) (name, value string, ok bool) {
 }
 
 // applyParamConstraints puts the bounds an annotation declared into a parameter's schema,
-// typed as the schema is. A bound that is not a value of that type is left off rather than
-// written as text: describing a parameter as accepting only the string "one" would reject
-// every number it really takes, and the annotation is what needs fixing.
-func applyParamConstraints(schema map[string]interface{}, p parsedParam) {
+// typed as the schema is.
+//
+// A bound that is not a value of that type is left off rather than written as text: describing
+// a parameter as accepting only the string "one" would reject every number it really takes. A
+// missing bound is less precise than the truth; a wrong one contradicts the handler, which is
+// why nothing is coerced here. But a bound the caller wrote and this generator dropped is
+// reported, because silently discarding it leaves a description weaker than its author believes
+// it to be - the same reason an unresolvable type is warned about rather than widened.
+func applyParamConstraints(schema map[string]interface{}, p parsedParam, reg *schemaRegistry) {
 	openapiType, _ := schema["type"].(string)
 
-	for key, raw := range map[string]string{"minimum": p.Minimum, "maximum": p.Maximum} {
-		if raw == "" {
+	for _, bound := range []struct{ key, raw string }{{"minimum", p.Minimum}, {"maximum", p.Maximum}} {
+		if bound.raw == "" {
 			continue
 		}
-		if value := typedValue(raw, openapiType); value != raw {
-			schema[key] = value
+		value := typedValue(bound.raw, openapiType)
+		if value == bound.raw && openapiType != "string" {
+			reg.warn("parameter %q declares %s(%s), which is not a %s, so the bound is left off",
+				p.Name, bound.key, bound.raw, openapiType)
+			continue
 		}
+		schema[bound.key] = value
 	}
 
 	if len(p.Enums) > 0 {
@@ -263,6 +272,8 @@ func applyParamConstraints(schema map[string]interface{}, p parsedParam) {
 				// set. Keeping the rest would describe the parameter as forbidding whichever
 				// value the mistyped one meant, which rejects input the handler accepts; an
 				// unconstrained parameter is less precise and never wrong.
+				reg.warn("parameter %q declares the enum value %q, which is not a %s, so the whole enum is left off",
+					p.Name, entry, openapiType)
 				return
 			}
 			values = append(values, value)
@@ -939,7 +950,7 @@ func methodsFor(method string) ([]string, bool) {
 
 // buildParameters builds the OpenAPI parameters list from parsed @Param data
 // and URL path template placeholders.
-func buildParameters(routerPath string, params []parsedParam) []Parameter {
+func buildParameters(routerPath string, params []parsedParam, reg *schemaRegistry) []Parameter {
 	var result []Parameter
 
 	// Index path param metadata for merging with URL template
@@ -974,7 +985,7 @@ func buildParameters(routerPath string, params []parsedParam) []Parameter {
 				desc = meta.Description
 			}
 			schema = dataTypeSchema(meta.DataType)
-			applyParamConstraints(schema, meta)
+			applyParamConstraints(schema, meta, reg)
 			if meta.Example != "" {
 				example = parameterExample(meta.DataType, meta.Example)
 			}
@@ -997,7 +1008,7 @@ func buildParameters(routerPath string, params []parsedParam) []Parameter {
 			continue
 		}
 		schema := dataTypeSchema(p.DataType)
-		applyParamConstraints(schema, p)
+		applyParamConstraints(schema, p, reg)
 		param := Parameter{
 			Name:        p.Name,
 			In:          p.In,
@@ -1276,7 +1287,7 @@ func buildPathItem(routerPath string, tags tagSet, reg *schemaRegistry) PathItem
 
 	var parameters []Parameter
 	if routerPath != "" {
-		parameters = buildParameters(routerPath, params)
+		parameters = buildParameters(routerPath, params, reg)
 	}
 
 	requestBody := buildRequestBody(params, reg)

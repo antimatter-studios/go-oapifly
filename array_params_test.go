@@ -95,7 +95,7 @@ func TestBuildParameters_ArrayQueryParam(t *testing.T) {
 	if !ok {
 		t.Fatal("annotation did not parse")
 	}
-	result := buildParameters("/api/jobs", []parsedParam{p})
+	result := buildParameters("/api/jobs", []parsedParam{p}, newSchemaRegistry(nil))
 	if len(result) != 1 {
 		t.Fatalf("expected 1 param, got %d", len(result))
 	}

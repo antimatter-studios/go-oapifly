@@ -265,7 +265,7 @@ func TestBuildParameters_PathOnly(t *testing.T) {
 	params := []parsedParam{
 		{Name: "id", In: "path", DataType: "int", Required: true, Description: "User ID", Example: "123"},
 	}
-	result := buildParameters("/api/users/{id}", params)
+	result := buildParameters("/api/users/{id}", params, newSchemaRegistry(nil))
 
 	if len(result) != 1 {
 		t.Fatalf("expected 1 param, got %d", len(result))
@@ -290,7 +290,7 @@ func TestBuildParameters_PathQueryHeader(t *testing.T) {
 		{Name: "limit", In: "query", DataType: "int", Required: false, Description: "Limit", Example: "20"},
 		{Name: "Authorization", In: "header", DataType: "string", Required: true, Description: "Token"},
 	}
-	result := buildParameters("/api/users/{id}", params)
+	result := buildParameters("/api/users/{id}", params, newSchemaRegistry(nil))
 
 	if len(result) != 4 {
 		t.Fatalf("expected 4 params, got %d", len(result))
@@ -320,7 +320,7 @@ func TestBuildParameters_NoPlaceholders(t *testing.T) {
 	params := []parsedParam{
 		{Name: "q", In: "query", DataType: "string", Required: false},
 	}
-	result := buildParameters("/api/search", params)
+	result := buildParameters("/api/search", params, newSchemaRegistry(nil))
 
 	if len(result) != 1 {
 		t.Fatalf("expected 1 param, got %d", len(result))
@@ -331,7 +331,7 @@ func TestBuildParameters_NoPlaceholders(t *testing.T) {
 }
 
 func TestBuildParameters_NoParams(t *testing.T) {
-	result := buildParameters("/api/items", nil)
+	result := buildParameters("/api/items", nil, newSchemaRegistry(nil))
 	if len(result) != 0 {
 		t.Errorf("expected 0 params, got %d", len(result))
 	}
@@ -343,7 +343,7 @@ func TestBuildParameters_SkipsBodyAndFormData(t *testing.T) {
 		{Name: "file", In: "formData", DataType: "file", Required: true},
 		{Name: "q", In: "query", DataType: "string"},
 	}
-	result := buildParameters("/api/items", params)
+	result := buildParameters("/api/items", params, newSchemaRegistry(nil))
 
 	if len(result) != 1 {
 		t.Fatalf("expected 1 param (query only), got %d", len(result))
@@ -355,7 +355,7 @@ func TestBuildParameters_SkipsBodyAndFormData(t *testing.T) {
 
 func TestBuildParameters_PathFallbackDefaults(t *testing.T) {
 	// Path param with no @Param metadata — should get defaults
-	result := buildParameters("/api/{id}", nil)
+	result := buildParameters("/api/{id}", nil, newSchemaRegistry(nil))
 	if len(result) != 1 {
 		t.Fatalf("expected 1, got %d", len(result))
 	}

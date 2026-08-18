@@ -2,6 +2,7 @@ package oapifly
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -82,7 +83,7 @@ func TestBuildParameters_CarriesConstraints(t *testing.T) {
 		{Name: "limit", In: "query", DataType: "int", Description: "Page size", Minimum: "1", Maximum: "100"},
 		{Name: "type", In: "query", DataType: "string", Description: "Key type", Enums: []string{"authorized", "device"}},
 	}
-	result := buildParameters("/api/v1/things", params)
+	result := buildParameters("/api/v1/things", params, newSchemaRegistry(nil))
 	if len(result) != 2 {
 		t.Fatalf("expected 2 parameters, got %d", len(result))
 	}
@@ -106,7 +107,7 @@ func TestBuildParameters_PathParameterConstraints(t *testing.T) {
 	params := []parsedParam{
 		{Name: "id", In: "path", DataType: "int", Required: true, Minimum: "1"},
 	}
-	result := buildParameters("/api/v1/things/{id}", params)
+	result := buildParameters("/api/v1/things/{id}", params, newSchemaRegistry(nil))
 	if len(result) != 1 {
 		t.Fatalf("expected 1 parameter, got %d", len(result))
 	}
@@ -122,7 +123,7 @@ func TestBuildParameters_NonNumericBoundIsDropped(t *testing.T) {
 	params := []parsedParam{
 		{Name: "page", In: "query", DataType: "int", Minimum: "one"},
 	}
-	result := buildParameters("/api/v1/things", params)
+	result := buildParameters("/api/v1/things", params, newSchemaRegistry(nil))
 	if _, present := result[0].Schema["minimum"]; present {
 		t.Errorf("a bound that is not a number should be left off, got %#v", result[0].Schema)
 	}
@@ -148,7 +149,7 @@ func TestBuildParameters_BoundsOnANumericAlias(t *testing.T) {
 	params := []parsedParam{
 		{Name: "id", In: "path", DataType: "int64", Required: true, Minimum: "1"},
 	}
-	result := buildParameters("/api/v1/things/{id}", params)
+	result := buildParameters("/api/v1/things/{id}", params, newSchemaRegistry(nil))
 	if result[0].Schema["type"] != "integer" {
 		t.Fatalf("an int64 parameter should be an integer, got %#v", result[0].Schema)
 	}
@@ -166,7 +167,7 @@ func TestBuildParameters_EnumWithAnUntypeableEntryIsDropped(t *testing.T) {
 	params := []parsedParam{
 		{Name: "priority", In: "query", DataType: "int", Enums: []string{"1", "two", "3"}},
 	}
-	result := buildParameters("/api/v1/things", params)
+	result := buildParameters("/api/v1/things", params, newSchemaRegistry(nil))
 	if enum, present := result[0].Schema["enum"]; present {
 		t.Errorf("the enum should have been left off entirely, got %#v", enum)
 	}
@@ -176,7 +177,7 @@ func TestBuildParameters_NumericEnumIsTyped(t *testing.T) {
 	params := []parsedParam{
 		{Name: "priority", In: "query", DataType: "int", Enums: []string{"1", "2", "3"}},
 	}
-	result := buildParameters("/api/v1/things", params)
+	result := buildParameters("/api/v1/things", params, newSchemaRegistry(nil))
 	enum, ok := result[0].Schema["enum"].([]interface{})
 	if !ok || len(enum) != 3 {
 		t.Fatalf("enum = %#v, want three numbers", result[0].Schema["enum"])
@@ -185,5 +186,62 @@ func TestBuildParameters_NumericEnumIsTyped(t *testing.T) {
 		if enum[i] != want {
 			t.Errorf("enum[%d] = %#v, want %v", i, enum[i], want)
 		}
+	}
+}
+
+// A bound the annotation declared and this generator could not use is reported, not silently
+// discarded: a description weaker than its author believes it to be is the failure mode every
+// other warning in this package exists to prevent.
+func TestApplyParamConstraints_ReportsWhatItDropped(t *testing.T) {
+	tests := []struct {
+		name  string
+		param parsedParam
+		says  string
+	}{
+		{
+			"a bound that is not a number",
+			parsedParam{Name: "page", In: "query", DataType: "int", Minimum: "one"},
+			"minimum(one)",
+		},
+		{
+			// An unsigned bound past the signed range cannot be held exactly by a JSON number,
+			// so it is left off rather than rounded into a bound the handler does not enforce.
+			"an unsigned bound past the signed range",
+			parsedParam{Name: "id", In: "query", DataType: "uint64", Maximum: "18446744073709551615"},
+			"maximum(18446744073709551615)",
+		},
+		{
+			"an enum entry of the wrong type",
+			parsedParam{Name: "priority", In: "query", DataType: "int", Enums: []string{"1", "two"}},
+			"enum value \"two\"",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			reg := newSchemaRegistry(nil)
+			buildParameters("/api/v1/things", []parsedParam{tt.param}, reg)
+
+			found := false
+			for _, w := range reg.warnings {
+				if strings.Contains(w, tt.says) && strings.Contains(w, tt.param.Name) {
+					found = true
+				}
+			}
+			if !found {
+				t.Errorf("the dropped constraint was not reported: %q", reg.warnings)
+			}
+		})
+	}
+}
+
+// A bound it could use is not warned about.
+func TestApplyParamConstraints_SilentWhenItCanUseTheBound(t *testing.T) {
+	reg := newSchemaRegistry(nil)
+	buildParameters("/api/v1/things", []parsedParam{
+		{Name: "limit", In: "query", DataType: "int", Minimum: "1", Maximum: "100"},
+		{Name: "type", In: "query", DataType: "string", Enums: []string{"authorized", "device"}},
+	}, reg)
+	if len(reg.warnings) != 0 {
+		t.Errorf("expected no warnings, got %q", reg.warnings)
 	}
 }
