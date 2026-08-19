@@ -97,6 +97,12 @@ func stripPackagePrefix(refType string) string {
 // stripping the package prefix for file/AST lookup while preserving the full
 // name as the schema key.
 func (r *schemaRegistry) resolve(refType string) string {
+	// An empty interface is a description in itself, not a type to go looking for.
+	if isAnyType(refType) {
+		r.schemas[anyValueSchemaName] = map[string]interface{}{}
+		return anyValueSchemaName
+	}
+
 	// A generic instantiation names no declaration of its own - the file declares the base
 	// and the arguments arrive beside it - so it is resolved by binding rather than lookup.
 	if base, args, ok := parseGenericName(refType); ok {
@@ -1385,4 +1391,28 @@ func findTypeFile(typeName string, dirs []string) string {
 		}
 	}
 	return aliasPath
+}
+
+// anyValueSchemaName names the component describing a value this API deliberately does not
+// constrain.
+//
+// `interface{}` in an annotation is a statement rather than an omission - a proxy answers with
+// whatever the far end said - so it is described as a schema with no constraints instead of
+// being reported as a type that could not be found. Warning about it made a document containing
+// a deliberate any-value permanently un-clean, and warnings that can never reach zero stop being
+// read, which is how a genuinely undescribed type hides.
+//
+// A named component rather than an inline schema because resolve answers with a name; a legal
+// one, because `interface{}` used to be the key itself and OpenAPI allows only [a-zA-Z0-9.-_]
+// there, so every reference to it dangled and a validator was entitled to reject the document.
+const anyValueSchemaName = "AnyValue"
+
+// isAnyType reports whether a token names Go's empty interface, in either spelling and with or
+// without the space a printer may leave inside the braces.
+func isAnyType(name string) bool {
+	switch strings.TrimSpace(name) {
+	case "interface{}", "interface {}", "any":
+		return true
+	}
+	return false
 }
