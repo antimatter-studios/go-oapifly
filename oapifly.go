@@ -27,6 +27,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	yaml "gopkg.in/yaml.v2"
 )
@@ -46,6 +47,10 @@ type Generator struct {
 
 	// endpoints are the operations registered in code (Register).
 	endpoints []Endpoint
+
+	// mu makes Generate and Register safe to call from several goroutines: a server that
+	// builds its document on the first request can have several first requests at once.
+	mu sync.Mutex
 }
 
 // New creates a new Generator with the given config.
@@ -72,8 +77,19 @@ func resolveFiles(patterns []string) []string {
 }
 
 // Generate builds and returns the OpenAPI spec as a map.
-// The result is cached after the first call since source files don't change at runtime.
+//
+// The result is cached after the first call, since neither the source files nor the
+// registrations are expected to change at runtime, and every caller gets the same map, which
+// it must treat as read-only. Concurrent calls are safe: the first builds the document and the
+// rest wait for it. A Register after the document was built makes the next call build it
+// again, so a late registration is never silently left out.
 func (g *Generator) Generate() map[string]interface{} {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.generate()
+}
+
+func (g *Generator) generate() map[string]interface{} {
 	if g.cached != nil {
 		return g.cached
 	}
