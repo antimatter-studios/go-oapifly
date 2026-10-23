@@ -3,6 +3,7 @@ package oapifly
 import (
 	"reflect"
 	"strings"
+	"sync"
 )
 
 // EmptyLists returns v with every nil slice and nil map it would encode replaced by an empty
@@ -20,7 +21,9 @@ import (
 // where null means something different from empty belongs in its own, explicitly nullable
 // field, not a nil list.
 //
-// v is not modified: the result is a copy wherever something had to change.
+// v is not modified: the result is a copy wherever something could have changed, and a part of
+// v whose type cannot hold a list, such as a []byte or a struct of scalars, is shared with it
+// rather than walked.
 func EmptyLists[T any](v T) T {
 	in := reflect.ValueOf(&v).Elem()
 	out := emptied(in, map[uintptr]bool{})
@@ -29,6 +32,9 @@ func EmptyLists[T any](v T) T {
 
 // emptied returns v, or a copy of it with its nil lists made empty.
 func emptied(v reflect.Value, seen map[uintptr]bool) reflect.Value {
+	if !mayHoldList(v.Type()) {
+		return v
+	}
 	switch v.Kind() {
 	case reflect.Interface:
 		if v.IsNil() {
@@ -120,4 +126,49 @@ func isNilList(v reflect.Value) bool {
 func tagOptions(tag string) string {
 	_, opts, _ := strings.Cut(tag, ",")
 	return opts
+}
+
+// holdsList caches mayHoldList's answer per type.
+var holdsList sync.Map // reflect.Type -> bool
+
+// mayHoldList reports whether a value of type t can contain a slice or map that EmptyLists
+// would make empty, so a value that cannot is returned as it is instead of being walked.
+func mayHoldList(t reflect.Type) bool {
+	if known, ok := holdsList.Load(t); ok {
+		return known.(bool)
+	}
+	holds := reachesList(t, map[reflect.Type]bool{})
+	holdsList.Store(t, holds)
+	return holds
+}
+
+// reachesList is mayHoldList without the cache. A type already being looked at further up
+// answers false: whatever it reaches is being looked at there. For that reason only the
+// outermost answer is cached.
+func reachesList(t reflect.Type, visiting map[reflect.Type]bool) bool {
+	if visiting[t] {
+		return false
+	}
+	visiting[t] = true
+	defer delete(visiting, t)
+	switch t.Kind() {
+	case reflect.Map, reflect.Interface:
+		return true
+	case reflect.Slice:
+		// A []byte is a base64 string, never a list.
+		return t.Elem().Kind() != reflect.Uint8 || reachesList(t.Elem(), visiting)
+	case reflect.Pointer, reflect.Array:
+		return reachesList(t.Elem(), visiting)
+	case reflect.Struct:
+		for i := 0; i < t.NumField(); i++ {
+			f := t.Field(i)
+			if (!f.IsExported() && !f.Anonymous) || f.Tag.Get("json") == "-" {
+				continue
+			}
+			if reachesList(f.Type, visiting) {
+				return true
+			}
+		}
+	}
+	return false
 }

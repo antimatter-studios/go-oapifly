@@ -2,6 +2,7 @@ package oapifly
 
 import (
 	"encoding/json"
+	"reflect"
 	"testing"
 )
 
@@ -98,5 +99,70 @@ func TestEmptyListsTopLevel(t *testing.T) {
 	}
 	if got := encoded(t, EmptyLists((*listsInner)(nil))); got != `null` {
 		t.Fatalf("a nil pointer stays null: %s", got)
+	}
+}
+
+type listsAttachment struct {
+	Name string `json:"name"`
+	Data []byte `json:"data"`
+}
+
+type listsMessage struct {
+	Subject     string            `json:"subject"`
+	Attachments []listsAttachment `json:"attachments"`
+}
+
+// A part whose type cannot hold a list is returned as it is: a large []byte is shared, not
+// copied byte by byte, while the lists around it are still filled.
+func TestEmptyListsSharesWhatCannotHoldAList(t *testing.T) {
+	data := make([]byte, 1<<20)
+	in := listsMessage{Attachments: []listsAttachment{{Name: "a", Data: data}}}
+	out := EmptyLists(in)
+	if &out.Attachments[0].Data[0] != &data[0] {
+		t.Fatal("the attachment's bytes were copied")
+	}
+	if got := EmptyLists(listsMessage{}); got.Attachments == nil {
+		t.Fatalf("the list is filled: %+v", got)
+	}
+}
+
+// Which types can hold a list, including types that refer to themselves.
+func TestMayHoldList(t *testing.T) {
+	type leaf struct {
+		Name  string
+		Next  *leaf
+		Bytes []byte
+		skip  []string
+		Gone  []string `json:"-"`
+	}
+	type branch struct {
+		Self *branch
+		Kids []string
+	}
+	type viaPointer struct{ B *branch }
+	cases := []struct {
+		v    interface{}
+		want bool
+	}{
+		{"", false},
+		{0, false},
+		{[]byte(nil), false},
+		{[4]byte{}, false},
+		{leaf{}, false},
+		{&leaf{}, false},
+		{[]string(nil), true},
+		{map[string]int(nil), true},
+		{[2][]int{}, true},
+		{branch{}, true},
+		{viaPointer{}, true},
+		{listsResponse{}, true},
+	}
+	for _, c := range cases {
+		if got := mayHoldList(reflect.TypeOf(c.v)); got != c.want {
+			t.Errorf("%T: %v, want %v", c.v, got, c.want)
+		}
+	}
+	if got := mayHoldList(reflect.TypeOf((*interface{})(nil)).Elem()); !got {
+		t.Error("an interface can hold anything")
 	}
 }
