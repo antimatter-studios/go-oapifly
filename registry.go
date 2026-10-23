@@ -2,7 +2,6 @@ package oapifly
 
 import (
 	"fmt"
-	"net/http"
 	"reflect"
 	"sort"
 	"strconv"
@@ -43,6 +42,15 @@ type Endpoint struct {
 
 	// Responses are the answers the operation can give, one per status.
 	Responses []EndpointResponse
+
+	// Security is how the operation is authorised: alternatives, each naming the schemes it
+	// needs and the roles held there, so the role the router enforces is the role the
+	// document states. nil inherits Config.Security; Public needs no credential.
+	Security []SecurityRequirement
+
+	// Middleware describes what the middleware wrapping the operation adds: responses it
+	// can answer, the security it enforces and the roles it requires, outermost first.
+	Middleware []Middleware
 }
 
 // EndpointResponse is one response of a registered operation.
@@ -54,6 +62,8 @@ type EndpointResponse struct {
 	Type reflect.Type
 	// MediaType defaults to application/json when Type is set.
 	MediaType string
+	// Headers are the headers the response carries, by name: Retry-After on a 429.
+	Headers map[string]ResponseHeader
 }
 
 // TypeOf returns the type of T, for an Endpoint's Request and a response's Type:
@@ -75,7 +85,7 @@ func (g *Generator) Register(endpoints ...Endpoint) {
 // addEndpoints puts the registered operations into paths. A route an annotated handler also
 // describes takes its structure from the registration - the code - and only the titles,
 // description, tags and operationId the registration leaves empty from the annotation.
-func addEndpoints(endpoints []Endpoint, paths map[string]map[string]PathItem, reg *schemaRegistry) {
+func addEndpoints(endpoints []Endpoint, paths map[string]map[string]PathItem, defaultSecurity []SecurityRequirement, reg *schemaRegistry) {
 	seen := map[string]bool{}
 	for _, e := range endpoints {
 		method := strings.ToLower(strings.TrimSpace(e.Method))
@@ -94,7 +104,7 @@ func addEndpoints(endpoints []Endpoint, paths map[string]map[string]PathItem, re
 		}
 		seen[key] = true
 
-		item := buildEndpointItem(e, reg)
+		item := buildEndpointItem(e, defaultSecurity, reg)
 		if _, ok := paths[e.Path]; !ok {
 			paths[e.Path] = map[string]PathItem{}
 		}
@@ -126,10 +136,13 @@ func fillFromAnnotation(item, annotated PathItem) PathItem {
 	if !item.Deprecated {
 		item.Deprecated = annotated.Deprecated
 	}
+	if item.Security == nil {
+		item.Security = annotated.Security
+	}
 	return item
 }
 
-func buildEndpointItem(e Endpoint, reg *schemaRegistry) PathItem {
+func buildEndpointItem(e Endpoint, defaultSecurity []SecurityRequirement, reg *schemaRegistry) PathItem {
 	route := strings.ToUpper(e.Method) + " " + e.Path
 	parameters, requestBody := endpointRequest(route, e.Path, e.Request, reg)
 
@@ -139,22 +152,9 @@ func buildEndpointItem(e Endpoint, reg *schemaRegistry) PathItem {
 		if _, dup := responses[status]; dup {
 			reg.warn("%s: response %s is registered twice, the later one is used", route, status)
 		}
-		desc := r.Description
-		if desc == "" {
-			desc = http.StatusText(r.Status)
-		}
-		resp := Response{Description: desc}
-		if r.Type != nil {
-			media := r.MediaType
-			if media == "" {
-				media = "application/json"
-			}
-			resp.Content = map[string]interface{}{
-				media: map[string]interface{}{"schema": reg.reflectSchema(r.Type)},
-			}
-		}
-		responses[status] = resp
+		responses[status] = describeResponse(r, reg)
 	}
+	addMiddlewareResponses(responses, e.Middleware, reg)
 
 	return PathItem{
 		Summary:     e.Summary,
@@ -165,6 +165,7 @@ func buildEndpointItem(e Endpoint, reg *schemaRegistry) PathItem {
 		Parameters:  parameters,
 		RequestBody: requestBody,
 		Responses:   responses,
+		Security:    requirementsOf(effectiveSecurity(route, e.Security, e.Middleware, defaultSecurity, reg)),
 	}
 }
 

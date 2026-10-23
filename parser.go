@@ -1449,6 +1449,7 @@ func buildPathItem(routerPath string, tags tagSet, reg *schemaRegistry) PathItem
 		}
 	}
 	attachExamples(examples, requestBody, responses)
+	attachHeaders(routerPath, tags.getAll("Header"), responses, reg)
 
 	return PathItem{
 		Summary:     tags.get("Summary"),
@@ -1459,6 +1460,7 @@ func buildPathItem(routerPath string, tags tagSet, reg *schemaRegistry) PathItem
 		Parameters:  parameters,
 		RequestBody: requestBody,
 		Responses:   responses,
+		Security:    annotatedSecurity(tags.get("Router"), tags.getAll("Security"), reg),
 	}
 }
 
