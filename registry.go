@@ -64,6 +64,8 @@ func TypeOf[T any]() reflect.Type {
 // Register adds an operation described by its Go types. Registering after Generate has been
 // called makes the next call build the document again.
 func (g *Generator) Register(endpoints ...Endpoint) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
 	g.endpoints = append(g.endpoints, endpoints...)
 	g.cached = nil
 }
