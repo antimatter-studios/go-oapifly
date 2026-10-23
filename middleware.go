@@ -69,16 +69,65 @@ func describeResponse(r EndpointResponse, reg *schemaRegistry) Response {
 		desc = http.StatusText(r.Status)
 	}
 	resp := Response{Description: desc, Headers: describeHeaders(r.Headers, reg)}
-	if r.Type != nil {
-		media := r.MediaType
-		if media == "" {
-			media = "application/json"
-		}
+	media := r.MediaType
+	if media == "" && r.Type != nil {
+		media = "application/json"
+	}
+	switch {
+	case media == "":
+		// No body at all.
+	case r.Type == nil || (r.Type.Kind() == reflect.Slice && r.Type.Elem().Kind() == reflect.Uint8 && !isJSONMedia(media)):
+		// A body of that media type whose bytes this document does not describe: a
+		// message/rfc822 message, a download. OpenAPI 3.1 spells that a media type with no
+		// schema; a []byte under JSON would be base64, but here the bytes are the body.
+		resp.Content = map[string]interface{}{media: map[string]interface{}{}}
+	default:
 		resp.Content = map[string]interface{}{
 			media: map[string]interface{}{"schema": reg.reflectSchema(r.Type)},
 		}
 	}
 	return resp
+}
+
+// isJSONMedia reports whether a media type carries JSON, which a Go type describes.
+func isJSONMedia(media string) bool {
+	base := strings.TrimSpace(strings.SplitN(media, ";", 2)[0])
+	return base == "application/json" || strings.HasSuffix(base, "+json")
+}
+
+// sharesMediaType reports whether two descriptions of one status name a media type in
+// common, or neither has a body.
+func sharesMediaType(a, b Response) bool {
+	if len(a.Content) == 0 && len(b.Content) == 0 {
+		return true
+	}
+	for media := range b.Content {
+		if _, ok := a.Content[media]; ok {
+			return true
+		}
+	}
+	return false
+}
+
+// withContentOf adds b's media types and headers to a.
+func withContentOf(a, b Response) Response {
+	content := map[string]interface{}{}
+	for media, v := range a.Content {
+		content[media] = v
+	}
+	for media, v := range b.Content {
+		content[media] = v
+	}
+	a.Content = content
+	for name, h := range b.Headers {
+		if _, ok := a.Headers[name]; !ok {
+			if a.Headers == nil {
+				a.Headers = map[string]Header{}
+			}
+			a.Headers[name] = h
+		}
+	}
+	return a
 }
 
 // addMiddlewareResponses adds what an operation's middleware can answer to the responses

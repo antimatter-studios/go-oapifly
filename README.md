@@ -196,6 +196,7 @@ generator.Register(
 
 - **Parameters:** fields tagged `path:"name"`, `query:"name"` and `header:"name"` are parameters. Query and header parameters are optional unless the tag says `,required`. A `description` tag describes one, and `enums`, `format` and `example` constrain it, as they do a body field.
 - **Body:** the field tagged `body:""` is the request body; `body:"<media type>"` names one that is not JSON. A request type with no parameter fields is the body itself.
+- **Responses:** each `EndpointResponse` has its own `MediaType` (JSON by default) and `Headers`. A response with a media type and no `Type`, or a `[]byte` under a media type that is not JSON, is a body of that type whose bytes are not described (a `message/rfc822` message, a download). One status may be registered once per media type, for an answer that comes in more than one.
 - **Schemas:** follow encoding/json, and are the same ones the annotation path produces for the same types:
   - `omitempty` is not required;
   - a pointer is nullable;
