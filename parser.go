@@ -699,6 +699,35 @@ func applyTagConstraints(schema map[string]interface{}, tag string) {
 	if raw := extractTagValue(tag, "example"); raw != "" {
 		schema["example"] = typedTagValue(raw, schema)
 	}
+
+	// Bounds, lengths, a pattern and an item count, each where it means something: the binder
+	// enforces the same tags on the same kinds of value (Bind), and a tag that is not a
+	// number of the right kind is left off both.
+	schemaType, _ := schema["type"].(string)
+	var keys []string
+	switch schemaType {
+	case "integer", "number":
+		keys = []string{"minimum", "maximum"}
+	case "string":
+		keys = []string{"minLength", "maxLength"}
+		if pattern := extractTagValue(tag, "pattern"); pattern != "" {
+			schema["pattern"] = pattern
+		}
+	case "array":
+		keys = []string{"minItems", "maxItems"}
+	}
+	for _, key := range keys {
+		kind := schemaType
+		if kind != "number" {
+			kind = "integer"
+		}
+		if value, ok := typedValue(extractTagValue(tag, key), kind).(float64); ok {
+			if kind == "integer" && key != "minimum" && key != "maximum" && value < 0 {
+				continue
+			}
+			schema[key] = value
+		}
+	}
 }
 
 // typedTagValue reads a tag's text as the type the schema declares.
@@ -710,21 +739,9 @@ func typedTagValue(raw string, schema map[string]interface{}) interface{} {
 // extractTagValue extracts a specific key's value from a Go struct tag string.
 // e.g. extractTagValue(`json:"username" xml:"user"`, "json") → "username"
 func extractTagValue(tag, key string) string {
-	lookup := key + ":"
-	idx := strings.Index(tag, lookup)
-	if idx < 0 {
-		return ""
-	}
-	rest := tag[idx+len(lookup):]
-	if len(rest) == 0 || rest[0] != '"' {
-		return ""
-	}
-	rest = rest[1:]
-	end := strings.Index(rest, "\"")
-	if end < 0 {
-		return ""
-	}
-	return rest[:end]
+	// The tag as written in the source is the tag reflection reports, so both paths read it
+	// the way Go does: exact keys, and quoted values with their escapes undone.
+	return reflect.StructTag(tag).Get(key)
 }
 
 // qualifiedJSONTypes are the standard-library and well-known types whose JSON form is
