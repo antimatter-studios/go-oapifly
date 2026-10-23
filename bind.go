@@ -194,11 +194,16 @@ func parseParameter(dst reflect.Value, raw string) (string, error) {
 	case reflect.String:
 		dst.SetString(raw)
 	case reflect.Bool:
-		v, err := strconv.ParseBool(raw)
-		if err != nil {
+		// A boolean parameter is serialized as true or false: the other spellings
+		// strconv.ParseBool reads (1, t, TRUE and so on) are not the schema's.
+		switch raw {
+		case "true":
+			dst.SetBool(true)
+		case "false":
+			dst.SetBool(false)
+		default:
 			return "must be a boolean", nil
 		}
-		dst.SetBool(v)
 	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
 		v, err := strconv.ParseInt(raw, 10, dst.Type().Bits())
 		if err != nil {
