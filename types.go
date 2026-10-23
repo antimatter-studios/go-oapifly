@@ -18,6 +18,12 @@ type Config struct {
 	// TypeDirs are directories to search for Go type definitions referenced by annotations.
 	// Defaults to ["types"] if empty.
 	TypeDirs []string
+
+	// OpenStructs describes every struct as an open object, one that accepts properties it
+	// does not declare, as releases before v0.18.0 did. By default a struct's schema is
+	// closed (additionalProperties: false), and a struct is opened one at a time with a
+	// field tagged oapi:"open" (#30).
+	OpenStructs bool
 }
 
 // Parameter represents an OpenAPI parameter (path, query, or header).

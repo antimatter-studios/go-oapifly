@@ -65,6 +65,9 @@ type schemaRegistry struct {
 	// described to the arguments it was instantiated with. Empty everywhere else.
 	typeArgs map[string]typeArg
 
+	// openStructs leaves struct schemas open instead of closing them (Config.OpenStructs).
+	openStructs bool
+
 	// genericOrigins records which instantiation produced each generic component name, so a
 	// second instantiation reducing to the same name is reported rather than silently
 	// answered by the first one's schema. It doubles as the recursion guard for generics.
@@ -485,23 +488,25 @@ func schemaForNamedTypeAST(typeName, filePath string, reg *schemaRegistry) (sche
 }
 
 // embeddedFields returns the properties an embedded type contributes to the struct that
-// embeds it. A type outside the configured TypeDirs cannot be read, and its fields would
-// disappear from the schema without a word, so that is reported rather than passed over.
-func (r *schemaRegistry) embeddedFields(expr ast.Expr) (map[string]interface{}, []string) {
+// embeds it, and whether it leaves that struct open. A type outside the configured TypeDirs
+// cannot be read, and its fields would disappear from the schema without a word, so that is
+// reported rather than passed over, and the struct is left open: closing it would refuse the
+// fields the schema could not name.
+func (r *schemaRegistry) embeddedFields(expr ast.Expr) (map[string]interface{}, []string, bool) {
 	name, display := embeddedTypeName(expr)
 	if name == "" {
-		return nil, nil
+		return nil, nil, true
 	}
 
 	if r.resolving[name] {
 		// Reached from its own definition further up the stack; the fields are already there.
-		return nil, nil
+		return nil, nil, false
 	}
 
 	typeFile := findTypeFile(name, r.typeDirs)
 	if typeFile == "" {
 		r.warn("embedded type %s is not in any configured TypeDirs, its fields are missing from the schema", display)
-		return nil, nil
+		return nil, nil, true
 	}
 
 	r.resolving[name] = true
@@ -510,12 +515,12 @@ func (r *schemaRegistry) embeddedFields(expr ast.Expr) (map[string]interface{}, 
 
 	if !isStruct || schema == nil {
 		r.warn("embedded type %s in %s is not a struct, its fields are missing from the schema", display, typeFile)
-		return nil, nil
+		return nil, nil, true
 	}
 
 	props, _ := schema["properties"].(map[string]interface{})
 	required, _ := schema["required"].([]string)
-	return props, required
+	return props, required, !isClosed(schema)
 }
 
 // embeddedTypeName reports the type name of an embedded field, and how to name it in a
@@ -540,17 +545,28 @@ func embeddedTypeName(expr ast.Expr) (name, display string) {
 func buildSchemaFromStructAST(st *ast.StructType, reg *schemaRegistry) map[string]interface{} {
 	props := map[string]interface{}{}
 	var required []string
+	open := reg.openStructs
 
 	for _, field := range st.Fields.List {
+		if field.Tag != nil && opensSchema(strings.Trim(field.Tag.Value, "`")) {
+			open = true
+		}
 		if len(field.Names) == 0 {
 			// Go promotes an embedded struct's fields into the same JSON object, so they are
 			// merged here. Skipping them described a type built entirely from embeds - a
 			// gorm.Model and a payload struct, say - as an object with no fields at all.
-			embeddedProps, embeddedRequired := reg.embeddedFields(field.Type)
+			embeddedProps, embeddedRequired, embeddedOpen := reg.embeddedFields(field.Type)
 			for name, schema := range embeddedProps {
 				props[name] = schema
 			}
 			required = append(required, embeddedRequired...)
+			if embeddedOpen {
+				open = true
+			}
+			continue
+		}
+		if field.Names[0].Name == "_" {
+			// A blank field is never encoded; it is where a marker such as oapi:"open" goes.
 			continue
 		}
 
@@ -575,7 +591,35 @@ func buildSchemaFromStructAST(st *ast.StructType, reg *schemaRegistry) map[strin
 	if len(required) > 0 {
 		result["required"] = required
 	}
+	closeUnlessOpen(result, open)
 	return result
+}
+
+// opensSchema reports whether a struct tag carries oapi:"open". A field tagged so, usually a
+// blank one (`_ struct{} oapi:"open"`), describes the struct that holds it as an open
+// object, one that accepts properties it does not declare (#30).
+func opensSchema(tag string) bool {
+	for _, opt := range strings.Split(extractTagValue(tag, "oapi"), ",") {
+		if strings.TrimSpace(opt) == "open" {
+			return true
+		}
+	}
+	return false
+}
+
+// closeUnlessOpen closes a struct's object schema: a property the struct does not declare is
+// refused, so a response that starts leaking a field no longer matches its own description,
+// and a request with a misspelt field is refused rather than half applied (#30).
+func closeUnlessOpen(schema map[string]interface{}, open bool) {
+	if !open {
+		schema["additionalProperties"] = false
+	}
+}
+
+// isClosed reports whether closeUnlessOpen closed schema.
+func isClosed(schema map[string]interface{}) bool {
+	closed, ok := schema["additionalProperties"].(bool)
+	return ok && !closed
 }
 
 // resolveJSONFieldNameAST extracts JSON field name from an AST struct field's tag.
