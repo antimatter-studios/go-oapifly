@@ -162,6 +162,49 @@ itself - a tree - terminates.
 Where an argument is a shape this generator has no spelling for, such as a map or a func, the
 field is left an unconstrained object and a warning says which type could not be named.
 
+## Registering operations in code
+
+An operation can also be registered with the Go types it binds and answers, instead of described by annotations. Its structure is read from those types by reflection, so the document needs no source on disk at runtime.
+
+```go
+type DomainPath struct {
+	ID int64 `path:"id" description:"The domain's id"`
+}
+
+type UpdateDomain struct {
+	ID   int64          `path:"id"`
+	Body *DomainChanges `body:""`
+}
+
+generator.Register(
+	oapifly.Endpoint{
+		Method: "GET", Path: "/api/v1/domains/{id}",
+		OperationID: "getDomain", Summary: "Get a domain", Tags: []string{"domains"},
+		Request: oapifly.TypeOf[DomainPath](),
+		Responses: []oapifly.EndpointResponse{
+			{Status: 200, Type: oapifly.TypeOf[Domain]()},
+			{Status: 404, Type: oapifly.TypeOf[ErrorResponse]()},
+		},
+	},
+	oapifly.Endpoint{
+		Method: "PATCH", Path: "/api/v1/domains/{id}",
+		Request:   oapifly.TypeOf[UpdateDomain](),
+		Responses: []oapifly.EndpointResponse{{Status: 200, Type: oapifly.TypeOf[Domain]()}},
+	},
+)
+```
+
+- **Parameters:** fields tagged `path:"name"`, `query:"name"` and `header:"name"` are parameters. Query and header parameters are optional unless the tag says `,required`. A `description` tag describes one, and `enums`, `format` and `example` constrain it, as they do a body field.
+- **Body:** the field tagged `body:""` is the request body; `body:"<media type>"` names one that is not JSON. A request type with no parameter fields is the body itself.
+- **Schemas:** follow encoding/json, and are the same ones the annotation path produces for the same types:
+  - `omitempty` is not required;
+  - a pointer is nullable;
+  - an embedded struct's fields are promoted;
+  - a named struct is a component;
+  - `Page[Item]` is the component `Page-Item`.
+- **What it cannot place** is a warning, not a guess: a template variable with no field, a path field the template does not name, and fields that are neither parameter nor body.
+- **A route that is both annotated and registered** takes its structure from the registration. Where the registration leaves them out, the summary, description, operationId and tags come from the comments.
+
 ## How it works
 
 1. **Glob** your source files using the configured `ScanPatterns`
@@ -171,7 +214,7 @@ field is left an unconstrained object and a warning says which type could not be
 5. **Resolve** Go types to JSON Schema from their declarations, binding type parameters where a generic is instantiated
 6. **Return** a complete OpenAPI 3.0 spec as `map[string]interface{}`
 
-Since it reads source files at runtime, your application must be deployed alongside its source code (or at least the annotated files). This is the tradeoff for zero-build-step documentation.
+The annotation path reads source files at runtime, so an application using it must be deployed alongside its source code, or at least the annotated files. Registered operations need no source at all.
 
 ## License
 

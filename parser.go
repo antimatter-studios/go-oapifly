@@ -7,6 +7,7 @@ import (
 	"go/parser"
 	"go/token"
 	"os"
+	"reflect"
 	"strconv"
 	"strings"
 )
@@ -68,6 +69,10 @@ type schemaRegistry struct {
 	// second instantiation reducing to the same name is reported rather than silently
 	// answered by the first one's schema. It doubles as the recursion guard for generics.
 	genericOrigins map[string]string
+
+	// reflectOwners records which Go type each component registered by reflection belongs
+	// to, so two types sharing a short name are told apart instead of merged (#26).
+	reflectOwners map[string]reflect.Type
 }
 
 func newSchemaRegistry(typeDirs []string) *schemaRegistry {
@@ -622,8 +627,13 @@ func applyFieldConstraints(schema map[string]interface{}, field *ast.Field) {
 	if field.Tag == nil {
 		return
 	}
-	tag := strings.Trim(field.Tag.Value, "`")
+	applyTagConstraints(schema, strings.Trim(field.Tag.Value, "`"))
+}
 
+// applyTagConstraints puts a struct tag's constraints into a schema. It is shared by the
+// annotation path, which reads the tag from source, and the registry, which reads it by
+// reflection, so the two describe the same field the same way.
+func applyTagConstraints(schema map[string]interface{}, tag string) {
 	if raw := extractTagValue(tag, "enums"); raw != "" {
 		var values []interface{}
 		for _, part := range strings.Split(raw, ",") {
@@ -695,6 +705,9 @@ var qualifiedJSONTypes = map[string]map[string]interface{}{
 	// json.RawMessage is whatever the producer put in it, so the honest schema constrains
 	// nothing at all rather than claiming a type.
 	"json.RawMessage": {},
+	// Newer Go releases declare json.RawMessage as an alias of jsontext.Value, which is the
+	// name reflection reports for it.
+	"jsontext.Value": {},
 }
 
 // resolveFieldTypeAST maps an AST type expression to an OpenAPI schema map. Named types

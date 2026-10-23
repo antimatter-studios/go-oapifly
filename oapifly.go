@@ -43,6 +43,9 @@ type Generator struct {
 	// cached holds the generated spec after the first call to Generate.
 	// Source files don't change at runtime, so the spec is computed once.
 	cached map[string]interface{}
+
+	// endpoints are the operations registered in code (Register).
+	endpoints []Endpoint
 }
 
 // New creates a new Generator with the given config.
@@ -85,7 +88,14 @@ func (g *Generator) Generate() map[string]interface{} {
 
 	files := resolveFiles(g.Config.ScanPatterns)
 	if len(files) == 0 {
-		return map[string]interface{}{"error": "No files found for scan patterns: " + strings.Join(g.Config.ScanPatterns, ", ")}
+		if len(g.endpoints) == 0 {
+			return map[string]interface{}{"error": "No files found for scan patterns: " + strings.Join(g.Config.ScanPatterns, ", ")}
+		}
+		// Registered operations need no source on disk; patterns that match nothing are
+		// still worth knowing about.
+		if len(g.Config.ScanPatterns) > 0 {
+			g.Warnings = append(g.Warnings, "No files found for scan patterns: "+strings.Join(g.Config.ScanPatterns, ", "))
+		}
 	}
 
 	for _, file := range files {
@@ -140,6 +150,10 @@ func (g *Generator) Generate() map[string]interface{} {
 			reg.resolve(structName)
 		}
 	}
+
+	// Operations registered in code join the annotated ones; where both describe a route,
+	// the registration's structure is used.
+	addEndpoints(g.endpoints, paths, reg)
 
 	// A link's target can only be checked once every operation has been read, since an
 	// operation may be linked to from a file parsed before its own.
