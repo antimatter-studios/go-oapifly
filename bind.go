@@ -475,7 +475,7 @@ func valueProblem(v reflect.Value, tag reflect.StructTag) string {
 	case reflect.String:
 		s := v.String()
 		if enums := tag.Get("enums"); enums != "" && !oneOf(s, enums) {
-			return "must be one of " + listed(enums)
+			return "must be one of " + listedQuoted(enums)
 		}
 		length := utf8.RuneCountInString(s)
 		if n, ok := lengthBound(tag, "minLength"); ok && length < n {
@@ -574,6 +574,18 @@ func numberOneOf(n float64, enums, kind string) bool {
 		}
 	}
 	return false
+}
+
+// listedQuoted lists string values quoted, so an empty one can be told apart: "a", "b" or "".
+func listedQuoted(enums string) string {
+	parts := strings.Split(enums, ",")
+	for i := range parts {
+		parts[i] = strconv.Quote(strings.TrimSpace(parts[i]))
+	}
+	if len(parts) == 1 {
+		return parts[0]
+	}
+	return strings.Join(parts[:len(parts)-1], ", ") + " or " + parts[len(parts)-1]
 }
 
 func listed(enums string) string {
