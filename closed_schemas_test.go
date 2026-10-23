@@ -197,10 +197,6 @@ func accepts(t *testing.T, components map[string]map[string]interface{}, schema 
 		}
 		return accepts(t, components, target, value)
 	}
-	if value == nil {
-		nullable, _ := schema["nullable"].(bool)
-		return nullable
-	}
 	if parts, ok := schema["allOf"].([]interface{}); ok {
 		for _, part := range parts {
 			if !accepts(t, components, part.(map[string]interface{}), value) {
@@ -208,7 +204,45 @@ func accepts(t *testing.T, components map[string]map[string]interface{}, schema 
 			}
 		}
 	}
-	switch schema["type"] {
+	for _, key := range []string{"oneOf", "anyOf"} {
+		parts, ok := schema[key].([]interface{})
+		if !ok {
+			continue
+		}
+		held := 0
+		for _, part := range parts {
+			if accepts(t, components, part.(map[string]interface{}), value) {
+				held++
+			}
+		}
+		if held == 0 || (key == "oneOf" && held > 1) {
+			return false
+		}
+	}
+	types := []interface{}{schema["type"]}
+	if list, ok := schema["type"].([]interface{}); ok {
+		types = list
+	}
+	if value == nil {
+		for _, each := range types {
+			if each == "null" {
+				return true
+			}
+		}
+		return schema["type"] == nil
+	}
+	for _, each := range types {
+		if each != "null" && acceptsType(t, components, schema, each, value) {
+			return true
+		}
+	}
+	return false
+}
+
+// acceptsType checks value against one of a schema's types.
+func acceptsType(t *testing.T, components map[string]map[string]interface{}, schema map[string]interface{}, typ, value interface{}) bool {
+	t.Helper()
+	switch typ {
 	case "object":
 		obj, ok := value.(map[string]interface{})
 		if !ok {

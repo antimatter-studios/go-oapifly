@@ -353,8 +353,8 @@ func isNull(raw json.RawMessage) bool {
 }
 
 func nullableKnownType(t reflect.Type) bool {
-	nullable, _ := qualifiedJSONTypes[qualifiedName(t)]["nullable"].(bool)
-	return nullable
+	known, ok := qualifiedJSONTypes[qualifiedName(t)]
+	return ok && permitsNull(known)
 }
 
 func at(path string) string {

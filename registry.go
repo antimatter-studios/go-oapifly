@@ -309,9 +309,9 @@ func fieldParameter(f reflect.StructField, in string, reg *schemaRegistry) Param
 		Required:    in == "path" || hasOption(opts, "required"),
 		Schema:      schema,
 	}
-	if example, ok := schema["example"]; ok {
-		p.Example = example
-		delete(schema, "example")
+	if examples, ok := schema["examples"].([]interface{}); ok && len(examples) > 0 {
+		p.Example = examples[0]
+		delete(schema, "examples")
 	}
 	return p
 }

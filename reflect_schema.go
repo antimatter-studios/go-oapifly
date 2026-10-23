@@ -20,7 +20,7 @@ func (r *schemaRegistry) reflectSchema(t reflect.Type) map[string]interface{} {
 	}
 
 	if t.Kind() == reflect.Pointer {
-		// A pointer is the same type, absent-able: OpenAPI 3.0 spells that nullable.
+		// A pointer is the same type, absent-able: null is one of its values.
 		return asNullable(r.reflectSchema(t.Elem()))
 	}
 

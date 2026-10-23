@@ -1150,8 +1150,8 @@ type AllTypes struct {
 	}
 
 	ptrSchema := props["ptr"].(map[string]interface{})
-	if ptrSchema["type"] != "string" {
-		t.Errorf("ptr type = %v (should deref pointer)", ptrSchema["type"])
+	if schemaType(ptrSchema) != "string" || !permitsNull(ptrSchema) {
+		t.Errorf("ptr type = %v (should deref pointer, and permit null)", ptrSchema["type"])
 	}
 }
 

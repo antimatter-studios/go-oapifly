@@ -131,7 +131,7 @@ func (c *Controller) Create() {}
 	})
 	spec := g.Generate()
 
-	if spec["openapi"] != "3.0.0" {
+	if spec["openapi"] != "3.1.0" {
 		t.Errorf("openapi = %v", spec["openapi"])
 	}
 
@@ -583,7 +583,7 @@ func (c *C) Ping() {}
 	if err := json.Unmarshal(data, &spec); err != nil {
 		t.Fatalf("unmarshal error: %v", err)
 	}
-	if spec["openapi"] != "3.0.0" {
+	if spec["openapi"] != "3.1.0" {
 		t.Errorf("openapi = %v", spec["openapi"])
 	}
 }

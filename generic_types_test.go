@@ -450,7 +450,7 @@ func TestResolveGenericInstantiation_PointerArgument(t *testing.T) {
 		t.Fatalf("resolve returned %q, want Wrapper-ItemOrNull", name)
 	}
 	inner := propOf(t, reg.schemas[name], "inner")
-	if inner["nullable"] != true {
+	if !permitsNull(inner) {
 		t.Errorf("a pointer argument should be nullable, got %#v", inner)
 	}
 	// And the value instantiation stays separate.

@@ -112,8 +112,11 @@ type AddDeviceRequest struct {
 	reg := newSchemaRegistry([]string{dir})
 	prop := propOf(t, reg.schemas[reg.resolve("types.AddDeviceRequest")], "inpace_api_endpoint")
 
-	if prop["example"] != "http://10.0.0.5/api/v1" {
-		t.Fatalf("the example belongs in the schema: %#v", prop)
+	if examples, _ := prop["examples"].([]interface{}); len(examples) != 1 || examples[0] != "http://10.0.0.5/api/v1" {
+		t.Fatalf("the example belongs in the schema's examples: %#v", prop)
+	}
+	if _, ok := prop["example"]; ok {
+		t.Fatalf("OpenAPI 3.1 deprecates example in a schema: %#v", prop)
 	}
 }
 
@@ -129,11 +132,12 @@ type Job struct {
 	reg := newSchemaRegistry([]string{dir})
 	prop := propOf(t, reg.schemas[reg.resolve("types.Job")], "priority")
 
-	if _, isString := prop["example"].(string); isString {
-		t.Fatalf("a quoted example on an integer field is still a number: %#v", prop)
-	}
-	if prop["example"].(float64) != 3 {
+	examples, _ := prop["examples"].([]interface{})
+	if len(examples) != 1 {
 		t.Fatalf("example not carried through: %#v", prop)
+	}
+	if n, isNumber := examples[0].(float64); !isNumber || n != 3 {
+		t.Fatalf("a quoted example on an integer field is still a number: %#v", prop)
 	}
 }
 
@@ -168,7 +172,7 @@ type AddDeviceRequest struct {
 	reg := newSchemaRegistry([]string{dir})
 	prop := propOf(t, reg.schemas[reg.resolve("types.AddDeviceRequest")], "device_type")
 
-	if prop["example"] != "dongle" {
+	if examples, _ := prop["examples"].([]interface{}); len(examples) != 1 || examples[0] != "dongle" {
 		t.Fatalf("example missing: %#v", prop)
 	}
 	if values, _ := prop["enum"].([]interface{}); len(values) != 2 {
