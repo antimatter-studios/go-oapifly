@@ -34,9 +34,11 @@ type Endpoint struct {
 	// A pointer to a struct is read as the struct.
 	//
 	// A query or header parameter is optional unless its tag says `,required`. A
-	// `description:"..."` tag describes a parameter, and the enums, format and example tags
-	// constrain it the same way they constrain a body field. `body:"<media type>"` names a
-	// body that is not application/json.
+	// `description:"..."` tag describes a parameter, and the constraint tags (enums, format,
+	// example, minimum, maximum, minLength, maxLength, pattern, minItems, maxItems) constrain
+	// it the same way they constrain a body field. `body:"<media type>"` names a body that is
+	// not application/json. Bind reads a request into this type and enforces what is
+	// described.
 	Request reflect.Type
 
 	// Responses are the answers the operation can give, one per status.

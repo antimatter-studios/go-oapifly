@@ -209,6 +209,41 @@ generator.Register(
 
 The document describes a slice or map field without `omitempty` as a required array or object, never `null`, so a client gets `T[]` and needs no null check. Go's `encoding/json` writes a nil slice or map as `null`, so call `oapifly.EmptyLists(response)` just before encoding a response. It returns a copy with every nil list it would write replaced by `[]` (and every nil map by `{}`). Fields that are `omitempty`, tagged `json:"-"`, unexported, or a `[]byte` are left alone, as encoding/json leaves them. A field where null means something different from empty belongs in its own, explicitly nullable field.
 
+### Binding requests
+
+The rules a request type describes are enforced by `oapifly.Bind`, from the same declaration, so the document and the server cannot disagree about them:
+
+```go
+type CreateDomain struct {
+    Name  string `json:"name" minLength:"1" maxLength:"253" format:"hostname"`
+    Kind  string `json:"kind" enums:"primary,alias"`
+    Quota *int   `json:"quota,omitempty" minimum:"0"`
+}
+
+var req CreateDomain
+err := oapifly.Bind(&req, func(in, name string) (string, bool) {
+    switch in {
+    case "path":
+        v := chi.URLParam(r, name)
+        return v, v != ""
+    case "query":
+        _, ok := r.URL.Query()[name]
+        return r.URL.Query().Get(name), ok
+    }
+    v := r.Header.Get(name)
+    return v, v != ""
+}, body)
+```
+
+- `err` is `nil`, `oapifly.Violations` (answer 422 with the fields), an error wrapping `oapifly.ErrMalformedBody` (answer 400), or, for a request type that cannot be bound, a plain error.
+- Violations are keyed by parameter name (`limit`), or by the body field's JSON path (`owner.email`, `members[2].name`); the body as a whole is `body`. Every broken rule is reported, not just the first.
+- A parameter is required when it is in the path or its tag says `,required`. A body field without `omitempty` is required, and only a pointer field may be `null`.
+- Structs are closed: an undeclared property is refused unless the struct is open (see below). `oapifly.Binder{OpenStructs: true}.Bind` goes with `Config.OpenStructs`.
+- Values must have their described type, and the constraint tags must hold: `minimum` and `maximum` on numbers; `minLength`, `maxLength` (in characters), `pattern`, `enums` and `format` on strings; `enums` on numbers; `minItems` and `maxItems` on lists. A tag that is not a number of the right kind is left out of the document and is not enforced either.
+- `format` is checked for `email`, `uuid`, `date-time`, `date`, `uri`, `hostname`, `ipv4` and `ipv6`. Other formats are described and not checked, as JSON Schema treats a format it does not know as an annotation.
+- Types that read themselves (`time.Time`, `uuid.UUID`) are checked by reading them, and `json.RawMessage` accepts anything.
+- Rules that depend on state, such as a name already being taken, stay in the handler and are documented as its error responses.
+
 ## Struct schemas are closed
 
 A struct is described as a closed object, `additionalProperties: false`, whichever path describes it: a property the struct does not declare is refused. A response that starts leaking a field (a storage path, a hash, a token) then no longer matches its own description, and a contract tester can expect a request with an unknown field to be refused. A map is still an open object whose values follow the map's value type.
