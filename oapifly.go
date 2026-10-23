@@ -190,12 +190,27 @@ func (g *Generator) generate() map[string]interface{} {
 	if len(reg.schemas) > 0 {
 		components["schemas"] = reg.schemas
 	}
+	if len(g.Config.SecuritySchemes) > 0 {
+		components["securitySchemes"] = g.Config.SecuritySchemes
+	}
 
 	g.cached = map[string]interface{}{
 		"openapi":    "3.1.0",
 		"info":       info,
 		"paths":      paths,
 		"components": components,
+	}
+	if len(g.Config.Security) > 0 {
+		g.cached["security"] = *requirementsOf(g.Config.Security)
+	}
+	g.Warnings = append(g.Warnings, undefinedSchemes("Config.Security", g.Config.Security, g.Config.SecuritySchemes)...)
+	for _, path := range sortedPaths(paths) {
+		for _, method := range pathItemMethods {
+			if item, ok := paths[path][method]; ok && item.Security != nil {
+				where := strings.ToUpper(method) + " " + path
+				g.Warnings = append(g.Warnings, undefinedSchemes(where, *item.Security, g.Config.SecuritySchemes)...)
+			}
+		}
 	}
 	if documentGenerated != nil {
 		documentGenerated(g.cached)

@@ -1459,6 +1459,7 @@ func buildPathItem(routerPath string, tags tagSet, reg *schemaRegistry) PathItem
 		Parameters:  parameters,
 		RequestBody: requestBody,
 		Responses:   responses,
+		Security:    annotatedSecurity(tags.get("Router"), tags.getAll("Security"), reg),
 	}
 }
 

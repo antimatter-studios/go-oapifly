@@ -205,6 +205,39 @@ generator.Register(
 - **What it cannot place** is a warning, not a guess: a template variable with no field, a path field the template does not name, and fields that are neither parameter nor body.
 - **A route that is both annotated and registered** takes its structure from the registration. Where the registration leaves them out, the summary, description, operationId and tags come from the comments.
 
+### Security
+
+Configure how clients authenticate once, and state on each operation which of those ways it accepts and the roles it needs. OpenAPI 3.1 allows roles on any scheme, so a capability such as `domains:write` is part of the requirement:
+
+```go
+g := oapifly.New(oapifly.Config{
+    SecuritySchemes: map[string]oapifly.SecurityScheme{
+        "SessionCookie": {Type: "apiKey", In: "cookie", Name: "session"},
+        "CSRFHeader":    {Type: "apiKey", In: "header", Name: "X-CSRF-Token"},
+        "BearerAuth":    {Type: "http", Scheme: "bearer"},
+        "GatewayCert":   {Type: "mutualTLS"},
+    },
+    // What an operation needs when it states nothing.
+    Security: []oapifly.SecurityRequirement{{"BearerAuth": nil}},
+})
+
+g.Register(oapifly.Endpoint{
+    Method: "POST", Path: "/domains",
+    // Alternatives: a session with its CSRF header, or a bearer token. Either needs domains:write.
+    Security: []oapifly.SecurityRequirement{
+        {"SessionCookie": {"domains:write"}, "CSRFHeader": nil},
+        {"BearerAuth": {"domains:write"}},
+    },
+})
+g.Register(oapifly.Endpoint{Method: "GET", Path: "/health", Security: oapifly.Public})
+```
+
+- `Security: nil` inherits `Config.Security`, written as the document's top-level `security`.
+- `oapifly.Public` (an empty list) needs no credential and is written as `security: []`.
+- A scheme without roles is written with an empty list.
+- In annotations, swaggo's `@Security` does the same. Each line, and each `||` within a line, is an alternative; `&&` joins schemes that are all needed; roles go in brackets: `@Security SessionCookie && CSRFHeader || BearerAuth[domains:read]`.
+- A requirement naming a scheme that `Config.SecuritySchemes` does not define is reported in `Warnings`.
+
 ### Lists are never null
 
 The document describes a slice or map field without `omitempty` as a required array or object, never `null`, so a client gets `T[]` and needs no null check. Go's `encoding/json` writes a nil slice or map as `null`, so call `oapifly.EmptyLists(response)` just before encoding a response. It returns a copy with every nil list it would write replaced by `[]` (and every nil map by `{}`). Fields that are `omitempty`, tagged `json:"-"`, unexported, or a `[]byte` are left alone, as encoding/json leaves them. A field where null means something different from empty belongs in its own, explicitly nullable field.

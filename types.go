@@ -24,6 +24,15 @@ type Config struct {
 	// closed (additionalProperties: false), and a struct is opened one at a time with a
 	// field tagged oapi:"open" (#30).
 	OpenStructs bool
+
+	// SecuritySchemes are the ways a client can authenticate, written to
+	// components.securitySchemes under the names requirements use for them.
+	SecuritySchemes map[string]SecurityScheme
+
+	// Security is what an operation requires when it states nothing itself: alternatives,
+	// any one of which is enough. An operation overrides it with its own requirements, or
+	// with Public. Empty means an operation that states nothing needs no credential.
+	Security []SecurityRequirement
 }
 
 // Parameter represents an OpenAPI parameter (path, query, or header).
@@ -79,4 +88,7 @@ type PathItem struct {
 	Parameters  []Parameter         `json:"parameters,omitempty" yaml:"parameters,omitempty"`
 	RequestBody *RequestBody        `json:"requestBody,omitempty" yaml:"requestBody,omitempty"`
 	Responses   map[string]Response `json:"responses,omitempty" yaml:"responses,omitempty"`
+	// Security is the operation's own requirements, nil to inherit the document's. An empty
+	// list is written, and means the operation needs no credential.
+	Security *[]SecurityRequirement `json:"security,omitempty" yaml:"security,omitempty"`
 }

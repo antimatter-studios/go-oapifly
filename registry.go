@@ -43,6 +43,11 @@ type Endpoint struct {
 
 	// Responses are the answers the operation can give, one per status.
 	Responses []EndpointResponse
+
+	// Security is how the operation is authorised: alternatives, each naming the schemes it
+	// needs and the roles held there, so the role the router enforces is the role the
+	// document states. nil inherits Config.Security; Public needs no credential.
+	Security []SecurityRequirement
 }
 
 // EndpointResponse is one response of a registered operation.
@@ -126,6 +131,9 @@ func fillFromAnnotation(item, annotated PathItem) PathItem {
 	if !item.Deprecated {
 		item.Deprecated = annotated.Deprecated
 	}
+	if item.Security == nil {
+		item.Security = annotated.Security
+	}
 	return item
 }
 
@@ -165,6 +173,7 @@ func buildEndpointItem(e Endpoint, reg *schemaRegistry) PathItem {
 		Parameters:  parameters,
 		RequestBody: requestBody,
 		Responses:   responses,
+		Security:    requirementsOf(e.Security),
 	}
 }
 
