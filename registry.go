@@ -149,10 +149,19 @@ func buildEndpointItem(e Endpoint, defaultSecurity []SecurityRequirement, reg *s
 	responses := map[string]Response{}
 	for _, r := range e.Responses {
 		status := strconv.Itoa(r.Status)
-		if _, dup := responses[status]; dup {
+		described := describeResponse(r, reg)
+		existing, dup := responses[status]
+		if dup && sharesMediaType(existing, described) {
 			reg.warn("%s: response %s is registered twice, the later one is used", route, status)
+			dup = false
 		}
-		responses[status] = describeResponse(r, reg)
+		if dup {
+			// One status answered in more than one media type: a download that is sent in
+			// the stored file's own type, say. The first registration's description stays.
+			responses[status] = withContentOf(existing, described)
+			continue
+		}
+		responses[status] = described
 	}
 	addMiddlewareResponses(responses, e.Middleware, reg)
 
