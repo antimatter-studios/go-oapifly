@@ -111,6 +111,14 @@ func (r *schemaRegistry) resolve(refType string) string {
 		return anyValueSchemaName
 	}
 
+	// A type whose JSON form is not its Go structure (time.Time, json.RawMessage) is
+	// described the way it is as a field's type, not looked for in TypeDirs (#29).
+	if known, ok := qualifiedJSONTypes[strings.TrimSpace(refType)]; ok {
+		name := strings.TrimSpace(refType)
+		r.schemas[name] = copySchema(known)
+		return name
+	}
+
 	// A generic instantiation names no declaration of its own - the file declares the base
 	// and the arguments arrive beside it - so it is resolved by binding rather than lookup.
 	if base, args, ok := parseGenericName(refType); ok {
@@ -478,7 +486,10 @@ func schemaForNamedTypeAST(typeName, filePath string, reg *schemaRegistry) (sche
 			// An interface constrains nothing that can be expressed here - the concrete
 			// value is chosen at runtime - so it stays an unconstrained schema rather than
 			// claiming a shape.
-			if _, ok := typeSpec.Type.(*ast.InterfaceType); ok {
+			if iface, ok := typeSpec.Type.(*ast.InterfaceType); ok {
+				if iface.Methods != nil && len(iface.Methods.List) > 0 {
+					reg.warn("%s is an interface with methods, described as any value: its JSON shape is chosen at run time; give the API a concrete type", typeName)
+				}
 				return map[string]interface{}{}, false
 			}
 			return resolveFieldTypeAST(typeSpec.Type, reg), false
@@ -791,6 +802,10 @@ func resolveFieldTypeAST(expr ast.Expr, reg *schemaRegistry) map[string]interfac
 		if primitive := goIdentToOpenAPIType(t.Name); primitive != "object" {
 			return primitiveSchema(t.Name)
 		}
+		if t.Name == "any" {
+			// Any value at all: the unconstrained schema (#27).
+			return map[string]interface{}{}
+		}
 		// A non-primitive identifier is a type declared in this package.
 		return reg.refOrObject(t.Name, t.Name)
 	case *ast.IndexExpr:
@@ -822,6 +837,13 @@ func resolveFieldTypeAST(expr ast.Expr, reg *schemaRegistry) map[string]interfac
 			"type":                 "object",
 			"additionalProperties": resolveFieldTypeAST(t.Value, reg),
 		}
+	case *ast.InterfaceType:
+		// What an interface holds is chosen at run time, so the description cannot say:
+		// any value at all, never an object only (#27).
+		if t.Methods != nil && len(t.Methods.List) > 0 {
+			reg.warn("a field of an interface type with methods is described as any value: its JSON shape is chosen at run time; give the API a concrete type")
+		}
+		return map[string]interface{}{}
 	default:
 		return map[string]interface{}{"type": "object"}
 	}
