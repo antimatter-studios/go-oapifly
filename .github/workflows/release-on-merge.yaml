@@ -1,0 +1,53 @@
+name: Release on merge
+
+# Every merge to main is tagged with the next SemVer and released (#21). goreleaser runs in
+# this job: a tag pushed with GITHUB_TOKEN starts no other workflow, so release.yaml, which
+# releases a tag pushed by hand, would not see it.
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-on-merge
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+      # main is not protected yet, so a red merge is possible: it is not released.
+      - name: Test what is released
+        run: go test ./...
+      - name: Tag the merge
+        id: tag
+        run: |
+          existing=$(git tag --points-at HEAD --list 'v[0-9]*' | head -n 1)
+          if [ -n "$existing" ]; then
+            echo "HEAD is already $existing; nothing to release"
+            echo "skip=true" >>"$GITHUB_OUTPUT"
+            exit 0
+          fi
+          version=$(scripts/next-version.sh HEAD)
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "$version" -m "$version: $(git log -1 --format=%s)"
+          git push origin "$version"
+          echo "released $version"
+      - name: Release
+        if: steps.tag.outputs.skip != 'true'
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          version: "~> v2"
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

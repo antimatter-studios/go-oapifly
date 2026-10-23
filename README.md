@@ -332,6 +332,15 @@ A struct is described as a closed object, `additionalProperties: false`, whichev
 
 The annotation path reads source files at runtime, so an application using it must be deployed alongside its source code, or at least the annotated files. Registered operations need no source at all.
 
+## Releases
+
+Every merge to `main` is released: `.github/workflows/release-on-merge.yaml` runs the tests, tags the merge with the next version and publishes the release. The version follows the merged commit's conventional-commit type:
+- `feat:` bumps the minor version;
+- a breaking change (`feat!:`, or a `BREAKING CHANGE:` footer) bumps the minor version while on 0.x, and the major version from 1.0;
+- anything else bumps the patch version.
+
+`chore release:next` prints the version the current commit would get. `chore test`, `chore race` and `chore lint` run what CI runs.
+
 ## License
 
 MIT
