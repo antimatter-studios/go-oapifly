@@ -1,4 +1,4 @@
-// Package oapifly generates OpenAPI 3.0 specifications on the fly by scanning
+// Package oapifly generates OpenAPI 3.1 specifications on the fly by scanning
 // Go source files for swaggo-style annotations at runtime.
 //
 // Unlike traditional OpenAPI tooling that generates code from a spec, oapifly
@@ -33,7 +33,7 @@ import (
 )
 
 // Generator scans Go source files for swaggo-style annotations
-// and produces an OpenAPI 3.0 specification at runtime.
+// and produces an OpenAPI 3.1 specification at runtime.
 type Generator struct {
 	Config Config
 
@@ -192,14 +192,21 @@ func (g *Generator) generate() map[string]interface{} {
 	}
 
 	g.cached = map[string]interface{}{
-		"openapi":    "3.0.0",
+		"openapi":    "3.1.0",
 		"info":       info,
 		"paths":      paths,
 		"components": components,
 	}
+	if documentGenerated != nil {
+		documentGenerated(g.cached)
+	}
 
 	return g.cached
 }
+
+// documentGenerated, when set, is handed every document Generate builds. The tests set it to
+// check each one against the OpenAPI 3.1 schema.
+var documentGenerated func(map[string]interface{})
 
 // JSON returns the OpenAPI spec as JSON bytes.
 func (g *Generator) JSON() ([]byte, error) {

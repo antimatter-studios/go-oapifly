@@ -262,7 +262,7 @@ func parseAttribute(part string) (name, value string, ok bool) {
 // reported, because silently discarding it leaves a description weaker than its author believes
 // it to be - the same reason an unresolvable type is warned about rather than widened.
 func applyParamConstraints(schema map[string]interface{}, p parsedParam, reg *schemaRegistry) {
-	openapiType, _ := schema["type"].(string)
+	openapiType := schemaType(schema)
 
 	for _, bound := range []struct{ key, raw string }{{"minimum", p.Minimum}, {"maximum", p.Maximum}} {
 		if bound.raw == "" {
@@ -697,15 +697,16 @@ func applyTagConstraints(schema map[string]interface{}, tag string) {
 	}
 
 	if raw := extractTagValue(tag, "example"); raw != "" {
-		schema["example"] = typedTagValue(raw, schema)
+		// JSON Schema 2020-12 spells it examples, a list; OpenAPI 3.1 deprecates example.
+		schema["examples"] = []interface{}{typedTagValue(raw, schema)}
 	}
 
 	// Bounds, lengths, a pattern and an item count, each where it means something: the binder
 	// enforces the same tags on the same kinds of value (Bind), and a tag that is not a
 	// number of the right kind is left off both.
-	schemaType, _ := schema["type"].(string)
+	valueType := schemaType(schema)
 	var keys []string
-	switch schemaType {
+	switch valueType {
 	case "integer", "number":
 		keys = []string{"minimum", "maximum"}
 	case "string":
@@ -717,7 +718,7 @@ func applyTagConstraints(schema map[string]interface{}, tag string) {
 		keys = []string{"minItems", "maxItems"}
 	}
 	for _, key := range keys {
-		kind := schemaType
+		kind := valueType
 		if kind != "number" {
 			kind = "integer"
 		}
@@ -732,7 +733,7 @@ func applyTagConstraints(schema map[string]interface{}, tag string) {
 
 // typedTagValue reads a tag's text as the type the schema declares.
 func typedTagValue(raw string, schema map[string]interface{}) interface{} {
-	openapiType, _ := schema["type"].(string)
+	openapiType := schemaType(schema)
 	return typedValue(raw, openapiType)
 }
 
@@ -757,12 +758,12 @@ var qualifiedJSONTypes = map[string]map[string]interface{}{
 	"time.Time":       {"type": "string", "format": "date-time"},
 	"time.Duration":   {"type": "integer", "format": "int64"},
 	"uuid.UUID":       {"type": "string", "format": "uuid"},
-	"gorm.DeletedAt":  {"type": "string", "format": "date-time", "nullable": true},
-	"sql.NullString":  {"type": "string", "nullable": true},
-	"sql.NullTime":    {"type": "string", "format": "date-time", "nullable": true},
-	"sql.NullInt64":   {"type": "integer", "format": "int64", "nullable": true},
-	"sql.NullBool":    {"type": "boolean", "nullable": true},
-	"sql.NullFloat64": {"type": "number", "format": "double", "nullable": true},
+	"gorm.DeletedAt":  {"type": []interface{}{"string", "null"}, "format": "date-time"},
+	"sql.NullString":  {"type": []interface{}{"string", "null"}},
+	"sql.NullTime":    {"type": []interface{}{"string", "null"}, "format": "date-time"},
+	"sql.NullInt64":   {"type": []interface{}{"integer", "null"}, "format": "int64"},
+	"sql.NullBool":    {"type": []interface{}{"boolean", "null"}},
+	"sql.NullFloat64": {"type": []interface{}{"number", "null"}, "format": "double"},
 	// json.RawMessage is whatever the producer put in it, so the honest schema constrains
 	// nothing at all rather than claiming a type.
 	"json.RawMessage": {},
@@ -795,7 +796,7 @@ func resolveFieldTypeAST(expr ast.Expr, reg *schemaRegistry) map[string]interfac
 		// ... and with several: Pair[string, Item].
 		return reg.genericFieldSchema(t.X, t.Indices)
 	case *ast.StarExpr:
-		// A pointer is the same type, absent-able: OpenAPI 3.0 spells that nullable.
+		// A pointer is the same type, absent-able: null is one of its values.
 		return asNullable(resolveFieldTypeAST(t.X, reg))
 	case *ast.ArrayType:
 		items := resolveFieldTypeAST(t.Elt, reg)
@@ -822,35 +823,81 @@ func resolveFieldTypeAST(expr ast.Expr, reg *schemaRegistry) map[string]interfac
 	}
 }
 
-// asNullable marks a schema as permitting null.
+// asNullable marks a schema as permitting null, in the dialect OpenAPI 3.1 uses (JSON Schema
+// 2020-12): null joins the schema's type, and a reference, which has no type of its own to
+// join, becomes the referenced shape or null.
 //
-// A reference needs different treatment from an inline schema. In OpenAPI 3.0 and in JSON
-// Schema, any keyword sitting beside $ref is ignored, so `{"$ref": x, "nullable": true}`
-// describes a field as non-nullable however it is read - and a consumer validating a nil
-// pointer, which serialises to null, rejects a body the API legitimately returns. Wrapping
-// the reference in allOf gives the keyword something to apply to, which is the spelling the
-// OpenAPI 3.0 specification recommends for exactly this case.
+// Before 3.1 this was the nullable keyword, and a reference had to be wrapped in allOf with a
+// type beside it for the keyword to apply at all. 3.1 has no nullable keyword.
 func asNullable(schema map[string]interface{}) map[string]interface{} {
-	if len(schema) == 0 {
+	if len(schema) == 0 || permitsNull(schema) {
 		// An unconstrained schema already permits null; saying so would narrow nothing.
 		return schema
 	}
-
-	if ref, ok := schema["$ref"]; ok {
-		// type is stated in the same object on purpose. OpenAPI 3.0 defines nullable as
-		// adding null to the type declared alongside it, and only when a type is declared
-		// there - so allOf plus nullable on its own is as inert as the sibling keyword it
-		// replaced. A reference is only ever registered for a struct, so object is accurate,
-		// and allOf keeps the referenced shape rather than duplicating it inline.
-		return map[string]interface{}{
-			"type":     "object",
-			"nullable": true,
-			"allOf":    []interface{}{map[string]interface{}{"$ref": ref}},
-		}
+	if _, ok := schema["$ref"]; ok {
+		// A reference is only ever registered for a struct, an object that is never null,
+		// so exactly one of the two holds.
+		return map[string]interface{}{"oneOf": []interface{}{schema, nullSchema()}}
 	}
 
-	schema["nullable"] = true
+	switch t := schema["type"].(type) {
+	case string:
+		schema["type"] = []interface{}{t, "null"}
+	case []interface{}:
+		schema["type"] = append(append([]interface{}{}, t...), "null")
+	default:
+		// No type for null to join: null is the alternative to the whole schema, which may
+		// itself accept null, so either may hold.
+		return map[string]interface{}{"anyOf": []interface{}{schema, nullSchema()}}
+	}
+	if enum, ok := schema["enum"].([]interface{}); ok {
+		// An enum lists every allowed value, so null has to be one of them.
+		schema["enum"] = append(append([]interface{}{}, enum...), nil)
+	}
 	return schema
+}
+
+func nullSchema() map[string]interface{} {
+	return map[string]interface{}{"type": "null"}
+}
+
+// permitsNull reports whether asNullable has already made schema nullable.
+func permitsNull(schema map[string]interface{}) bool {
+	switch t := schema["type"].(type) {
+	case string:
+		return t == "null"
+	case []interface{}:
+		for _, each := range t {
+			if each == "null" {
+				return true
+			}
+		}
+	}
+	for _, key := range []string{"oneOf", "anyOf"} {
+		branches, _ := schema[key].([]interface{})
+		for _, branch := range branches {
+			if b, ok := branch.(map[string]interface{}); ok && len(b) == 1 && b["type"] == "null" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// schemaType is the type a schema describes its values as, leaving out null: a nullable
+// string is a string, constrained as one.
+func schemaType(schema map[string]interface{}) string {
+	switch t := schema["type"].(type) {
+	case string:
+		return t
+	case []interface{}:
+		for _, each := range t {
+			if name, ok := each.(string); ok && name != "null" {
+				return name
+			}
+		}
+	}
+	return ""
 }
 
 // copySchema returns a copy so a caller adding nullable to a pointer field cannot mutate

@@ -265,7 +265,7 @@ func (r *schemaRegistry) schemaForTypeText(text string) map[string]interface{} {
 		return map[string]interface{}{"type": "array", "items": r.schemaForTypeText(text[len("[]"):])}
 	}
 	if inner, ok := pointerItemType(text); ok {
-		// A pointer is the same type, absent-able, which OpenAPI 3.0 spells nullable.
+		// A pointer is the same type, absent-able: null is one of its values.
 		return asNullable(r.schemaForTypeText(inner))
 	}
 	if base, args, ok := parseGenericName(text); ok {

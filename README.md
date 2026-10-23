@@ -1,6 +1,6 @@
 # go-oapifly
 
-Generate OpenAPI 3.0 specs on the fly from annotated Go source code.
+Generate OpenAPI 3.1 specs on the fly from annotated Go source code.
 
 Unlike traditional OpenAPI tools that generate code *from* a spec, oapifly works in reverse: it reads your Go source files at runtime, parses [swaggo-style](https://github.com/swaggo/swag) annotations, and produces a live OpenAPI specification. Your docs stay in sync with your code automatically, no build step required.
 
@@ -249,7 +249,7 @@ err := oapifly.Bind(&req, func(in, name string) (string, bool) {
 A struct is described as a closed object, `additionalProperties: false`, whichever path describes it: a property the struct does not declare is refused. A response that starts leaking a field (a storage path, a hash, a token) then no longer matches its own description, and a contract tester can expect a request with an unknown field to be refused. A map is still an open object whose values follow the map's value type.
 
 - An embedded struct's fields are the object's own, as Go marshals them, so they are allowed.
-- A nullable reference is `allOf` around the closed component, which stays satisfiable and still refuses what the component does not declare.
+- A nullable reference is `oneOf: [{$ref}, {type: null}]`: the closed component or null, so it still refuses what the component does not declare.
 - Open one struct with a field tagged `oapi:"open"`, usually a blank one. A struct that embeds an open struct is open too, and so is one embedding a type the scanner cannot read, since its schema could not name those fields:
 
   ```go
@@ -268,7 +268,7 @@ A struct is described as a closed object, `additionalProperties: false`, whichev
 3. **Extract** swaggo `@Tag` annotations from handler method doc comments
 4. **Build** OpenAPI path items with parameters, responses, and schema references
 5. **Resolve** Go types to JSON Schema from their declarations, binding type parameters where a generic is instantiated
-6. **Return** a complete OpenAPI 3.0 spec as `map[string]interface{}`
+6. **Return** a complete OpenAPI 3.1 spec as `map[string]interface{}`
 
 The annotation path reads source files at runtime, so an application using it must be deployed alongside its source code, or at least the annotated files. Registered operations need no source at all.
 

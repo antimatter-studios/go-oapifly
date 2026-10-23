@@ -223,8 +223,8 @@ func TestRegistryNeedsNoSourceOnDisk(t *testing.T) {
 			t.Fatalf("component %s missing from %v", name, schemas)
 		}
 	}
-	if spec["openapi"] != "3.0.0" {
-		t.Fatalf("still an OpenAPI 3.0 document: %v", spec["openapi"])
+	if spec["openapi"] != "3.1.0" {
+		t.Fatalf("not an OpenAPI 3.1 document: %v", spec["openapi"])
 	}
 }
 
@@ -297,7 +297,7 @@ func TestRegistryParameters(t *testing.T) {
 	if limit.In != "query" || limit.Required || limit.Example != float64(20) && limit.Example != int64(20) && limit.Example != 20 {
 		t.Fatalf("an optional, typed query parameter with its example: %+v", limit)
 	}
-	if _, nullable := limit.Schema["nullable"]; nullable {
+	if permitsNull(limit.Schema) {
 		t.Fatalf("a pointer parameter is optional, not null: %+v", limit.Schema)
 	}
 	if asJSON(t, byName["sort"].Schema) != `{"enum":["name","created"],"type":"string"}` {
@@ -317,7 +317,7 @@ func TestRegistryParameters(t *testing.T) {
 	if put.RequestBody == nil || put.RequestBody.Required {
 		t.Fatalf("a pointer body field is an optional body: %+v", put.RequestBody)
 	}
-	if got := asJSON(t, put.RequestBody.Content); got != `{"application/json":{"schema":{"allOf":[{"$ref":"#/components/schemas/domainCreate"}],"nullable":true,"type":"object"}}}` {
+	if got := asJSON(t, put.RequestBody.Content); got != `{"application/json":{"schema":{"oneOf":[{"$ref":"#/components/schemas/domainCreate"},{"type":"null"}]}}}` {
 		t.Fatalf("body schema: %s", got)
 	}
 	if put.Responses["204"].Content != nil {
@@ -430,7 +430,7 @@ func TestRegistryDescribesLooseValuesHonestly(t *testing.T) {
 		"anything": `{}`,
 		"raw":      `{}`,
 		"blob":     `{"format":"byte","type":"string"}`,
-		"when":     `{"format":"date-time","nullable":true,"type":"string"}`,
+		"when":     `{"format":"date-time","type":["string","null"]}`,
 		"-":        `{"type":"string"}`,
 	}
 	for name, schema := range want {

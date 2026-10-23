@@ -194,8 +194,8 @@ type Row struct {
 	// deleted_at is null on every row that has not been soft-deleted, so the schema has to
 	// permit null or every list response fails validation.
 	deleted := propOf(t, schema, "deleted_at")
-	if deleted["nullable"] != true {
-		t.Errorf("gorm.DeletedAt must be nullable, got %#v", deleted)
+	if !permitsNull(deleted) || schemaType(deleted) != "string" {
+		t.Errorf("gorm.DeletedAt must be a nullable string, got %#v", deleted)
 	}
 
 	guid := propOf(t, schema, "guid")
@@ -227,7 +227,7 @@ type Optional struct {
 	schema := generateSchemaForTypeAST("Optional", path, reg)
 
 	note := propOf(t, schema, "note")
-	if note["type"] != "string" || note["nullable"] != true {
+	if asJSON(t, note) != `{"type":["string","null"]}` {
 		t.Errorf("pointer should be a nullable string, got %#v", note)
 	}
 }
@@ -247,10 +247,10 @@ type Times struct {
 	reg := newSchemaRegistry([]string{dir})
 	schema := generateSchemaForTypeAST("Times", path, reg)
 
-	if propOf(t, schema, "maybe")["nullable"] != true {
+	if !permitsNull(propOf(t, schema, "maybe")) {
 		t.Error("pointer timestamp should be nullable")
 	}
-	if _, leaked := propOf(t, schema, "always")["nullable"]; leaked {
+	if permitsNull(propOf(t, schema, "always")) {
 		t.Error("non-pointer timestamp must not have been made nullable")
 	}
 }
@@ -306,21 +306,9 @@ type Entry struct {
 	if _, bare := data["$ref"]; bare {
 		t.Fatal("a nullable ref must not be a bare $ref with a sibling keyword, which is ignored")
 	}
-	if data["nullable"] != true {
-		t.Errorf("wrapped ref should be nullable, got %#v", data)
-	}
-	// OpenAPI 3.0 applies nullable only to a type declared in the same object, so the
-	// wrapper without a local type would be as inert as the sibling keyword it replaced.
-	if data["type"] != "object" {
-		t.Errorf("nullable wrapper needs a local type for nullable to mean anything, got %#v", data)
-	}
-	allOf, ok := data["allOf"].([]interface{})
-	if !ok || len(allOf) != 1 {
-		t.Fatalf("expected a single-entry allOf, got %#v", data)
-	}
-	first, _ := allOf[0].(map[string]interface{})
-	if got, _ := first["$ref"].(string); got != "#/components/schemas/Payload" {
-		t.Errorf("allOf should reference Payload, got %#v", allOf[0])
+	// OpenAPI 3.1 has no nullable keyword: the reference or null, exactly one of them.
+	if got := asJSON(t, data); got != `{"oneOf":[{"$ref":"#/components/schemas/Payload"},{"type":"null"}]}` {
+		t.Errorf("a nullable reference is the reference or null, got %s", got)
 	}
 }
 
