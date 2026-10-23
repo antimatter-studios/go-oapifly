@@ -55,10 +55,9 @@ func (r *schemaRegistry) reflectSchema(t reflect.Type) map[string]interface{} {
 	case reflect.Bool:
 		return map[string]interface{}{"type": "boolean"}
 	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
-		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
-		return map[string]interface{}{"type": "integer"}
-	case reflect.Float32, reflect.Float64:
-		return map[string]interface{}{"type": "number"}
+		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64,
+		reflect.Float32, reflect.Float64:
+		return primitiveSchema(t.Kind().String())
 	}
 
 	r.warn("type %s has no JSON form this generator can express, described as an untyped object", t)
