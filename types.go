@@ -69,6 +69,8 @@ type Response struct {
 	// empty links object are different documents, and only the first is true when none were
 	// declared.
 	Links map[string]Link `json:"links,omitempty" yaml:"links,omitempty"`
+	// Headers are the headers the response carries, by name.
+	Headers map[string]Header `json:"headers,omitempty" yaml:"headers,omitempty"`
 }
 
 // Link represents an OpenAPI Link Object: a named step from this response to another operation,

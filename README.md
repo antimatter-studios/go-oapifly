@@ -238,6 +238,32 @@ g.Register(oapifly.Endpoint{Method: "GET", Path: "/health", Security: oapifly.Pu
 - In annotations, swaggo's `@Security` does the same. Each line, and each `||` within a line, is an alternative; `&&` joins schemes that are all needed; roles go in brackets: `@Security SessionCookie && CSRFHeader || BearerAuth[domains:read]`.
 - A requirement naming a scheme that `Config.SecuritySchemes` does not define is reported in `Warnings`.
 
+### Middleware and response headers
+
+Much of what an operation answers is written by its middleware: a 401 from authentication, a 403 from a capability check, a 429 from a rate limit. A middleware describes that once, and every operation it wraps carries it:
+
+```go
+var rateLimited = oapifly.Middleware{Responses: []oapifly.EndpointResponse{{
+    Status: 429, Type: oapifly.TypeOf[ErrorResponse](),
+    Headers: map[string]oapifly.ResponseHeader{"Retry-After": {Type: oapifly.TypeOf[int](), Required: true}},
+}}}
+
+func require(capability string) oapifly.Middleware {
+    return oapifly.Middleware{
+        Roles:     []string{capability},
+        Responses: []oapifly.EndpointResponse{{Status: 403, Type: oapifly.TypeOf[ErrorResponse]()}},
+    }
+}
+
+g.Register(oapifly.Endpoint{Method: "POST", Path: "/domains",
+    Middleware: []oapifly.Middleware{rateLimited, authenticated, require("domains:write")}})
+```
+
+- `Responses` are added to the operation's own. Where the operation states the same status, its own description is kept, and it gains any header it does not state.
+- `Security` is the requirement an authenticating middleware enforces, used when the operation states none (the innermost wins).
+- `Roles` are added to every scheme of every alternative of the operation's requirement: its own, else its middleware's, else `Config.Security`. A role on an operation that needs no credential is reported.
+- `EndpointResponse.Headers` describes a response's headers. In annotations, swaggo's `@Header 429 {integer} Retry-After "Seconds to wait"` does the same; the status may be a comma-separated list or `all`.
+
 ### Lists are never null
 
 The document describes a slice or map field without `omitempty` as a required array or object, never `null`, so a client gets `T[]` and needs no null check. Go's `encoding/json` writes a nil slice or map as `null`, so call `oapifly.EmptyLists(response)` just before encoding a response. It returns a copy with every nil list it would write replaced by `[]` (and every nil map by `{}`). Fields that are `omitempty`, tagged `json:"-"`, unexported, or a `[]byte` are left alone, as encoding/json leaves them. A field where null means something different from empty belongs in its own, explicitly nullable field.

@@ -170,7 +170,7 @@ func (g *Generator) generate() map[string]interface{} {
 
 	// Operations registered in code join the annotated ones; where both describe a route,
 	// the registration's structure is used.
-	addEndpoints(g.endpoints, paths, reg)
+	addEndpoints(g.endpoints, paths, g.Config.Security, reg)
 
 	// A link's target can only be checked once every operation has been read, since an
 	// operation may be linked to from a file parsed before its own.
