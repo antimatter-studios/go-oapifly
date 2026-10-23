@@ -301,6 +301,7 @@ err := oapifly.Bind(&req, func(in, name string) (string, bool) {
 - Values must have their described type, and the constraint tags must hold: `minimum` and `maximum` on numbers; `minLength`, `maxLength` (in characters), `pattern`, `enums` and `format` on strings; `enums` on numbers; `minItems` and `maxItems` on lists. A tag that is not a number of the right kind is left out of the document and is not enforced either.
 - `format` is checked for `email`, `uuid`, `date-time`, `date`, `uri`, `hostname`, `ipv4` and `ipv6`. Other formats are described and not checked, as JSON Schema treats a format it does not know as an annotation.
 - Types that read themselves (`time.Time`, `uuid.UUID`) are checked by reading them, and `json.RawMessage` accepts anything.
+- A field's `message:"..."` tag replaces the wording for any of its constraints that does not hold, so an API keeps the messages its clients already show as its rules move into the type. A missing field is still `required`, and a value of the wrong type still says which type it must be.
 - Rules that depend on state, such as a name already being taken, stay in the handler and are documented as its error responses.
 
 ## Struct schemas are closed

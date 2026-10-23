@@ -24,6 +24,7 @@ type bindCreate struct {
 	Ratio    float64           `json:"ratio,omitempty" minimum:"0.5"`
 	Priority int               `json:"priority,omitempty" enums:"1,2,3"`
 	Policy   string            `json:"policy,omitempty" enums:",quiet,silent"`
+	Mode     string            `json:"mode,omitempty" enums:"a,b" maxLength:"1" message:"must be 'a' or 'b'"`
 	Nickname *string           `json:"nickname" minLength:"2"`
 	Owner    *bindOwner        `json:"owner,omitempty"`
 	Members  []bindMember      `json:"members" minItems:"1" maxItems:"3"`
@@ -112,6 +113,8 @@ func TestBindEnforcesEachRule(t *testing.T) {
 		{"pattern", map[string]interface{}{"name": "ABC"}, "name", "must match ^[a-z]+$"},
 		{"string enum", map[string]interface{}{"kind": "group"}, "kind", `must be one of "alias" or "mailbox"`},
 		{"number enum", map[string]interface{}{"priority": 4}, "priority", "must be one of 1, 2, 3"},
+		{"a field's own message", map[string]interface{}{"mode": "c"}, "mode", "must be 'a' or 'b'"},
+		{"a field's own message is not for a wrong type", map[string]interface{}{"mode": 1}, "mode", "must be a string"},
 		{"an enum allowing the empty string", map[string]interface{}{"policy": "loud"}, "policy", `must be one of "", "quiet" or "silent"`},
 		{"format", map[string]interface{}{"owner": map[string]interface{}{"email": "nope"}}, "owner.email", "must be a valid email"},
 		{"minItems", map[string]interface{}{"members": []interface{}{}}, "members", "must have at least 1 item"},

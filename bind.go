@@ -43,6 +43,10 @@ func (v Violations) Error() string {
 	return "oapifly: " + strings.Join(parts, "; ")
 }
 
+// A field's message tag, when it has one, is the text reported for any of its constraints that
+// does not hold, in place of Bind's own wording; a missing field is still "required" and a
+// value of the wrong type still says what type it must be.
+//
 // Binder reads requests into the types registered for them (Endpoint.Request), enforcing the
 // rules the document describes from those same types (#23):
 //   - a parameter is required if it is in the path or its tag says ,required;
@@ -330,7 +334,7 @@ func (b Binder) check(raw json.RawMessage, t reflect.Type, tag reflect.StructTag
 			out[at(path)] = "must be an array"
 			return
 		}
-		if problem := itemsProblem(len(items), tag); problem != "" {
+		if problem := worded(itemsProblem(len(items), tag), tag); problem != "" {
 			out[at(path)] = problem
 		}
 		for i, item := range items {
@@ -468,6 +472,22 @@ func collectFields(t reflect.Type, into *structFields, visiting map[reflect.Type
 // valueProblem checks a scalar value against its field's constraint tags, the ones
 // applyTagConstraints describes, and says what is wrong with it.
 func valueProblem(v reflect.Value, tag reflect.StructTag) string {
+	return worded(constraintProblem(v, tag), tag)
+}
+
+// worded is a field's own wording for a broken constraint, its message tag, when it has one:
+// an API keeps the words its clients already show while its rules move into the type.
+func worded(problem string, tag reflect.StructTag) string {
+	if problem == "" {
+		return ""
+	}
+	if message := tag.Get("message"); message != "" {
+		return message
+	}
+	return problem
+}
+
+func constraintProblem(v reflect.Value, tag reflect.StructTag) string {
 	if tag == "" {
 		return ""
 	}
