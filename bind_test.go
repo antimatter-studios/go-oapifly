@@ -246,6 +246,31 @@ func TestBindParameters(t *testing.T) {
 	}
 }
 
+type bindFlag struct {
+	Unread *bool `query:"unread"`
+}
+
+// A boolean parameter is true or false, as its schema says, and nothing else Go would read
+// as one.
+func TestBindBooleanParameters(t *testing.T) {
+	for raw, want := range map[string]bool{"true": true, "false": false} {
+		var v bindFlag
+		if err := Bind(&v, params(map[string]string{"query:unread": raw}), nil); err != nil || v.Unread == nil || *v.Unread != want {
+			t.Errorf("%q: %v %+v", raw, err, v)
+		}
+	}
+	for _, raw := range []string{"1", "0", "t", "f", "T", "TRUE", "True", "FALSE", "yes", " true"} {
+		var v bindFlag
+		if got := violations(t, Bind(&v, params(map[string]string{"query:unread": raw}), nil)); got["unread"] != "must be a boolean" {
+			t.Errorf("%q: %v", raw, got)
+		}
+	}
+	var blank bindFlag
+	if err := Bind(&blank, params(map[string]string{}), nil); err != nil || blank.Unread != nil {
+		t.Errorf("an absent flag is left out: %v %+v", err, blank)
+	}
+}
+
 func TestBindBodyKinds(t *testing.T) {
 	var optional bindOptionalBody
 	if err := Bind(&optional, params(map[string]string{"path:id": "1"}), nil); err != nil || optional.Body != nil {
