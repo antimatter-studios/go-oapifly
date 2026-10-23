@@ -19,9 +19,10 @@ import (
 	"unicode/utf8"
 )
 
-// ErrMalformedBody is what Bind answers for a body that is not JSON at all, or a required body
-// that is missing: the request cannot be read, as opposed to read and found to break the
-// rules (Violations). A server answers it with 400.
+// ErrMalformedBody is what Bind answers for a body that is not JSON at all, is not the shape
+// its type reads (an array for an object), or is a required body that is missing: the request
+// cannot be read, as opposed to read and found to break the rules (Violations). A server
+// answers it with 400.
 var ErrMalformedBody = errors.New("oapifly: malformed request body")
 
 // Violations are the parts of a request that break the rules its type declares, each with
@@ -246,6 +247,9 @@ func (b Binder) bindBody(dst reflect.Value, media string, body []byte, out Viola
 	if !json.Valid(body) {
 		return fmt.Errorf("%w: not JSON", ErrMalformedBody)
 	}
+	if problem := rootShapeProblem(body, dst.Type()); problem != "" {
+		return fmt.Errorf("%w: %s", ErrMalformedBody, problem)
+	}
 
 	b.check(body, dst.Type(), "", "", out)
 	if len(out) > 0 {
@@ -350,6 +354,39 @@ func (b Binder) check(raw json.RawMessage, t reflect.Type, tag reflect.StructTag
 			out[at(path)] = problem
 		}
 	}
+}
+
+// rootShapeProblem says what is wrong with a body that is not even the shape its type reads:
+// an array where an object is read, an object where a list is, or null where the body cannot
+// be. That is a body the request cannot be read from, not one read and found to break a rule.
+func rootShapeProblem(body []byte, t reflect.Type) string {
+	if isNull(body) {
+		if t.Kind() == reflect.Pointer || t.Kind() == reflect.Interface {
+			return ""
+		}
+		return "the body is null"
+	}
+	for t.Kind() == reflect.Pointer {
+		t = t.Elem()
+	}
+	if reflect.PointerTo(t).Implements(jsonUnmarshalerType) || reflect.PointerTo(t).Implements(textUnmarshalerType) {
+		return ""
+	}
+	first := bytes.TrimSpace(body)[0]
+	switch t.Kind() {
+	case reflect.Struct, reflect.Map:
+		if first != '{' {
+			return "the body is not a JSON object"
+		}
+	case reflect.Slice, reflect.Array:
+		if t.Kind() == reflect.Slice && t.Elem().Kind() == reflect.Uint8 {
+			return ""
+		}
+		if first != '[' {
+			return "the body is not a JSON array"
+		}
+	}
+	return ""
 }
 
 func isNull(raw json.RawMessage) bool {

@@ -294,7 +294,7 @@ err := oapifly.Bind(&req, func(in, name string) (string, bool) {
 }, body)
 ```
 
-- `err` is `nil`, `oapifly.Violations` (answer 422 with the fields), an error wrapping `oapifly.ErrMalformedBody` (answer 400), or, for a request type that cannot be bound, a plain error.
+- `err` is `nil`, `oapifly.Violations` (answer 422 with the fields), an error wrapping `oapifly.ErrMalformedBody` (answer 400) for a body that is not JSON, is not the shape its type reads (an array for an object, or `null` where it cannot be), or is missing, or, for a request type that cannot be bound, a plain error.
 - Violations are keyed by parameter name (`limit`), or by the body field's JSON path (`owner.email`, `members[2].name`); the body as a whole is `body`. Every broken rule is reported, not just the first.
 - A parameter is required when it is in the path or its tag says `,required`. A body field without `omitempty` is required, and only a pointer field may be `null`.
 - Structs are closed: an undeclared property is refused unless the struct is open (see below). `oapifly.Binder{OpenStructs: true}.Bind` goes with `Config.OpenStructs`.

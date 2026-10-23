@@ -175,8 +175,10 @@ func TestBindMalformedBody(t *testing.T) {
 			t.Errorf("%q: %v", body, err)
 		}
 	}
-	if _, err := bindBody(t, Binder{}, `[1]`); violations(t, err)["body"] != "must be an object" {
-		t.Errorf("a body of the wrong shape is a violation: %v", err)
+	for _, body := range []string{`[1]`, `"text"`, `null`} {
+		if _, err := bindBody(t, Binder{}, body); !errors.Is(err, ErrMalformedBody) {
+			t.Errorf("%s is not the shape the body is read as: %v", body, err)
+		}
 	}
 }
 
@@ -256,6 +258,9 @@ func TestBindBodyKinds(t *testing.T) {
 	var list []bindMember
 	if err := Bind(&list, noParams, []byte(`[{"name":"a"},{"name":""}]`)); violations(t, err)["[1].name"] == "" {
 		t.Fatalf("a list body is checked item by item: %v", err)
+	}
+	if err := Bind(&list, noParams, []byte(`{"name":"a"}`)); !errors.Is(err, ErrMalformedBody) {
+		t.Fatalf("an object is not a list body: %v", err)
 	}
 }
 
