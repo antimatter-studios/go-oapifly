@@ -19,9 +19,10 @@ import (
 	"unicode/utf8"
 )
 
-// ErrMalformedBody is what Bind answers for a body that is not JSON at all, or a required body
-// that is missing: the request cannot be read, as opposed to read and found to break the
-// rules (Violations). A server answers it with 400.
+// ErrMalformedBody is what Bind answers for a body that is not JSON at all, is not the shape
+// its type reads (an array for an object), or is a required body that is missing: the request
+// cannot be read, as opposed to read and found to break the rules (Violations). A server
+// answers it with 400.
 var ErrMalformedBody = errors.New("oapifly: malformed request body")
 
 // Violations are the parts of a request that break the rules its type declares, each with
@@ -43,6 +44,10 @@ func (v Violations) Error() string {
 	return "oapifly: " + strings.Join(parts, "; ")
 }
 
+// A field's message tag, when it has one, is the text reported for any of its constraints that
+// does not hold, in place of Bind's own wording; a missing field is still "required" and a
+// value of the wrong type still says what type it must be.
+//
 // Binder reads requests into the types registered for them (Endpoint.Request), enforcing the
 // rules the document describes from those same types (#23):
 //   - a parameter is required if it is in the path or its tag says ,required;
@@ -242,6 +247,9 @@ func (b Binder) bindBody(dst reflect.Value, media string, body []byte, out Viola
 	if !json.Valid(body) {
 		return fmt.Errorf("%w: not JSON", ErrMalformedBody)
 	}
+	if problem := rootShapeProblem(body, dst.Type()); problem != "" {
+		return fmt.Errorf("%w: %s", ErrMalformedBody, problem)
+	}
 
 	b.check(body, dst.Type(), "", "", out)
 	if len(out) > 0 {
@@ -330,7 +338,7 @@ func (b Binder) check(raw json.RawMessage, t reflect.Type, tag reflect.StructTag
 			out[at(path)] = "must be an array"
 			return
 		}
-		if problem := itemsProblem(len(items), tag); problem != "" {
+		if problem := worded(itemsProblem(len(items), tag), tag); problem != "" {
 			out[at(path)] = problem
 		}
 		for i, item := range items {
@@ -346,6 +354,39 @@ func (b Binder) check(raw json.RawMessage, t reflect.Type, tag reflect.StructTag
 			out[at(path)] = problem
 		}
 	}
+}
+
+// rootShapeProblem says what is wrong with a body that is not even the shape its type reads:
+// an array where an object is read, an object where a list is, or null where the body cannot
+// be. That is a body the request cannot be read from, not one read and found to break a rule.
+func rootShapeProblem(body []byte, t reflect.Type) string {
+	if isNull(body) {
+		if t.Kind() == reflect.Pointer || t.Kind() == reflect.Interface {
+			return ""
+		}
+		return "the body is null"
+	}
+	for t.Kind() == reflect.Pointer {
+		t = t.Elem()
+	}
+	if reflect.PointerTo(t).Implements(jsonUnmarshalerType) || reflect.PointerTo(t).Implements(textUnmarshalerType) {
+		return ""
+	}
+	first := bytes.TrimSpace(body)[0]
+	switch t.Kind() {
+	case reflect.Struct, reflect.Map:
+		if first != '{' {
+			return "the body is not a JSON object"
+		}
+	case reflect.Slice, reflect.Array:
+		if t.Kind() == reflect.Slice && t.Elem().Kind() == reflect.Uint8 {
+			return ""
+		}
+		if first != '[' {
+			return "the body is not a JSON array"
+		}
+	}
+	return ""
 }
 
 func isNull(raw json.RawMessage) bool {
@@ -468,6 +509,22 @@ func collectFields(t reflect.Type, into *structFields, visiting map[reflect.Type
 // valueProblem checks a scalar value against its field's constraint tags, the ones
 // applyTagConstraints describes, and says what is wrong with it.
 func valueProblem(v reflect.Value, tag reflect.StructTag) string {
+	return worded(constraintProblem(v, tag), tag)
+}
+
+// worded is a field's own wording for a broken constraint, its message tag, when it has one:
+// an API keeps the words its clients already show while its rules move into the type.
+func worded(problem string, tag reflect.StructTag) string {
+	if problem == "" {
+		return ""
+	}
+	if message := tag.Get("message"); message != "" {
+		return message
+	}
+	return problem
+}
+
+func constraintProblem(v reflect.Value, tag reflect.StructTag) string {
 	if tag == "" {
 		return ""
 	}
@@ -475,7 +532,7 @@ func valueProblem(v reflect.Value, tag reflect.StructTag) string {
 	case reflect.String:
 		s := v.String()
 		if enums := tag.Get("enums"); enums != "" && !oneOf(s, enums) {
-			return "must be one of " + listed(enums)
+			return "must be one of " + listedQuoted(enums)
 		}
 		length := utf8.RuneCountInString(s)
 		if n, ok := lengthBound(tag, "minLength"); ok && length < n {
@@ -574,6 +631,18 @@ func numberOneOf(n float64, enums, kind string) bool {
 		}
 	}
 	return false
+}
+
+// listedQuoted lists string values quoted, so an empty one can be told apart: "a", "b" or "".
+func listedQuoted(enums string) string {
+	parts := strings.Split(enums, ",")
+	for i := range parts {
+		parts[i] = strconv.Quote(strings.TrimSpace(parts[i]))
+	}
+	if len(parts) == 1 {
+		return parts[0]
+	}
+	return strings.Join(parts[:len(parts)-1], ", ") + " or " + parts[len(parts)-1]
 }
 
 func listed(enums string) string {

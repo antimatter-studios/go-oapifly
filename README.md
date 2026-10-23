@@ -294,13 +294,14 @@ err := oapifly.Bind(&req, func(in, name string) (string, bool) {
 }, body)
 ```
 
-- `err` is `nil`, `oapifly.Violations` (answer 422 with the fields), an error wrapping `oapifly.ErrMalformedBody` (answer 400), or, for a request type that cannot be bound, a plain error.
+- `err` is `nil`, `oapifly.Violations` (answer 422 with the fields), an error wrapping `oapifly.ErrMalformedBody` (answer 400) for a body that is not JSON, is not the shape its type reads (an array for an object, or `null` where it cannot be), or is missing, or, for a request type that cannot be bound, a plain error.
 - Violations are keyed by parameter name (`limit`), or by the body field's JSON path (`owner.email`, `members[2].name`); the body as a whole is `body`. Every broken rule is reported, not just the first.
 - A parameter is required when it is in the path or its tag says `,required`. A body field without `omitempty` is required, and only a pointer field may be `null`.
 - Structs are closed: an undeclared property is refused unless the struct is open (see below). `oapifly.Binder{OpenStructs: true}.Bind` goes with `Config.OpenStructs`.
 - Values must have their described type, and the constraint tags must hold: `minimum` and `maximum` on numbers; `minLength`, `maxLength` (in characters), `pattern`, `enums` and `format` on strings; `enums` on numbers; `minItems` and `maxItems` on lists. A tag that is not a number of the right kind is left out of the document and is not enforced either.
 - `format` is checked for `email`, `uuid`, `date-time`, `date`, `uri`, `hostname`, `ipv4` and `ipv6`. Other formats are described and not checked, as JSON Schema treats a format it does not know as an annotation.
 - Types that read themselves (`time.Time`, `uuid.UUID`) are checked by reading them, and `json.RawMessage` accepts anything.
+- A field's `message:"..."` tag replaces the wording for any of its constraints that does not hold, so an API keeps the messages its clients already show as its rules move into the type. A missing field is still `required`, and a value of the wrong type still says which type it must be.
 - Rules that depend on state, such as a name already being taken, stay in the handler and are documented as its error responses.
 
 ## Struct schemas are closed

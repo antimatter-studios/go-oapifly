@@ -23,6 +23,8 @@ type bindCreate struct {
 	Quota    int               `json:"quota" minimum:"1" maximum:"100"`
 	Ratio    float64           `json:"ratio,omitempty" minimum:"0.5"`
 	Priority int               `json:"priority,omitempty" enums:"1,2,3"`
+	Policy   string            `json:"policy,omitempty" enums:",quiet,silent"`
+	Mode     string            `json:"mode,omitempty" enums:"a,b" maxLength:"1" message:"must be 'a' or 'b'"`
 	Nickname *string           `json:"nickname" minLength:"2"`
 	Owner    *bindOwner        `json:"owner,omitempty"`
 	Members  []bindMember      `json:"members" minItems:"1" maxItems:"3"`
@@ -109,8 +111,11 @@ func TestBindEnforcesEachRule(t *testing.T) {
 		{"maxLength", map[string]interface{}{"name": "abcdefghijk"}, "name", "must be at most 10 characters"},
 		{"length counts characters, not bytes", map[string]interface{}{"nickname": "é"}, "nickname", "must be at least 2 characters"},
 		{"pattern", map[string]interface{}{"name": "ABC"}, "name", "must match ^[a-z]+$"},
-		{"string enum", map[string]interface{}{"kind": "group"}, "kind", "must be one of alias, mailbox"},
+		{"string enum", map[string]interface{}{"kind": "group"}, "kind", `must be one of "alias" or "mailbox"`},
 		{"number enum", map[string]interface{}{"priority": 4}, "priority", "must be one of 1, 2, 3"},
+		{"a field's own message", map[string]interface{}{"mode": "c"}, "mode", "must be 'a' or 'b'"},
+		{"a field's own message is not for a wrong type", map[string]interface{}{"mode": 1}, "mode", "must be a string"},
+		{"an enum allowing the empty string", map[string]interface{}{"policy": "loud"}, "policy", `must be one of "", "quiet" or "silent"`},
 		{"format", map[string]interface{}{"owner": map[string]interface{}{"email": "nope"}}, "owner.email", "must be a valid email"},
 		{"minItems", map[string]interface{}{"members": []interface{}{}}, "members", "must have at least 1 item"},
 		{"maxItems", map[string]interface{}{"members": []interface{}{
@@ -170,8 +175,10 @@ func TestBindMalformedBody(t *testing.T) {
 			t.Errorf("%q: %v", body, err)
 		}
 	}
-	if _, err := bindBody(t, Binder{}, `[1]`); violations(t, err)["body"] != "must be an object" {
-		t.Errorf("a body of the wrong shape is a violation: %v", err)
+	for _, body := range []string{`[1]`, `"text"`, `null`} {
+		if _, err := bindBody(t, Binder{}, body); !errors.Is(err, ErrMalformedBody) {
+			t.Errorf("%s is not the shape the body is read as: %v", body, err)
+		}
 	}
 }
 
@@ -220,7 +227,7 @@ func TestBindParameters(t *testing.T) {
 		{map[string]string{"path:id": "7"}, Violations{"sort": "required"}},
 		{map[string]string{"path:id": "x", "query:sort": "name"}, Violations{"id": "must be a non-negative integer"}},
 		{map[string]string{"path:id": "7", "query:sort": "name", "query:limit": "0"}, Violations{"limit": "must be at least 1"}},
-		{map[string]string{"path:id": "7", "query:sort": "date"}, Violations{"sort": "must be one of name, size"}},
+		{map[string]string{"path:id": "7", "query:sort": "date"}, Violations{"sort": `must be one of "name" or "size"`}},
 		{map[string]string{"path:id": "7", "query:sort": "name", "header:X-Trace": "x"}, Violations{"X-Trace": "must match ^t[0-9]+$"}},
 	}
 	for _, c := range cases {
@@ -251,6 +258,9 @@ func TestBindBodyKinds(t *testing.T) {
 	var list []bindMember
 	if err := Bind(&list, noParams, []byte(`[{"name":"a"},{"name":""}]`)); violations(t, err)["[1].name"] == "" {
 		t.Fatalf("a list body is checked item by item: %v", err)
+	}
+	if err := Bind(&list, noParams, []byte(`{"name":"a"}`)); !errors.Is(err, ErrMalformedBody) {
+		t.Fatalf("an object is not a list body: %v", err)
 	}
 }
 
