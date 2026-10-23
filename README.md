@@ -205,6 +205,10 @@ generator.Register(
 - **What it cannot place** is a warning, not a guess: a template variable with no field, a path field the template does not name, and fields that are neither parameter nor body.
 - **A route that is both annotated and registered** takes its structure from the registration. Where the registration leaves them out, the summary, description, operationId and tags come from the comments.
 
+### Lists are never null
+
+The document describes a slice or map field without `omitempty` as a required array or object, never `null`, so a client gets `T[]` and needs no null check. Go's `encoding/json` writes a nil slice or map as `null`, so call `oapifly.EmptyLists(response)` just before encoding a response. It returns a copy with every nil list it would write replaced by `[]` (and every nil map by `{}`). Fields that are `omitempty`, tagged `json:"-"`, unexported, or a `[]byte` are left alone, as encoding/json leaves them. A field where null means something different from empty belongs in its own, explicitly nullable field.
+
 ## How it works
 
 1. **Glob** your source files using the configured `ScanPatterns`
