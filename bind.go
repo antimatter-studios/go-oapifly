@@ -479,10 +479,10 @@ func valueProblem(v reflect.Value, tag reflect.StructTag) string {
 		}
 		length := utf8.RuneCountInString(s)
 		if n, ok := lengthBound(tag, "minLength"); ok && length < n {
-			return fmt.Sprintf("must be at least %d characters", n)
+			return "must be at least " + counted(n, "character")
 		}
 		if n, ok := lengthBound(tag, "maxLength"); ok && length > n {
-			return fmt.Sprintf("must be at most %d characters", n)
+			return "must be at most " + counted(n, "character")
 		}
 		if pattern := tag.Get("pattern"); pattern != "" {
 			if re := compiledPattern(pattern); re != nil && !re.MatchString(s) {
@@ -520,12 +520,20 @@ func valueProblem(v reflect.Value, tag reflect.StructTag) string {
 
 func itemsProblem(n int, tag reflect.StructTag) string {
 	if bound, ok := lengthBound(tag, "minItems"); ok && n < bound {
-		return fmt.Sprintf("must have at least %d items", bound)
+		return "must have at least " + counted(bound, "item")
 	}
 	if bound, ok := lengthBound(tag, "maxItems"); ok && n > bound {
-		return fmt.Sprintf("must have at most %d items", bound)
+		return "must have at most " + counted(bound, "item")
 	}
 	return ""
+}
+
+// counted is "1 item" or "3 items".
+func counted(n int, noun string) string {
+	if n == 1 {
+		return "1 " + noun
+	}
+	return strconv.Itoa(n) + " " + noun + "s"
 }
 
 func numberKind(k reflect.Kind) string {

@@ -112,11 +112,11 @@ func TestBindEnforcesEachRule(t *testing.T) {
 		{"string enum", map[string]interface{}{"kind": "group"}, "kind", "must be one of alias, mailbox"},
 		{"number enum", map[string]interface{}{"priority": 4}, "priority", "must be one of 1, 2, 3"},
 		{"format", map[string]interface{}{"owner": map[string]interface{}{"email": "nope"}}, "owner.email", "must be a valid email"},
-		{"minItems", map[string]interface{}{"members": []interface{}{}}, "members", "must have at least 1 items"},
+		{"minItems", map[string]interface{}{"members": []interface{}{}}, "members", "must have at least 1 item"},
 		{"maxItems", map[string]interface{}{"members": []interface{}{
 			map[string]string{"name": "a"}, map[string]string{"name": "b"},
 			map[string]string{"name": "c"}, map[string]string{"name": "d"}}}, "members", "must have at most 3 items"},
-		{"inside a list", map[string]interface{}{"members": []interface{}{map[string]string{"name": ""}}}, "members[0].name", "must be at least 1 characters"},
+		{"inside a list", map[string]interface{}{"members": []interface{}{map[string]string{"name": ""}}}, "members[0].name", "must be at least 1 character"},
 		{"a closed struct", map[string]interface{}{"extra": 1}, "extra", "not allowed"},
 		{"a closed nested struct", map[string]interface{}{"owner": map[string]string{"email": "a@b.c", "x": "y"}}, "owner.x", "not allowed"},
 		{"a known type reads itself", map[string]interface{}{"when": "yesterday"}, "when", "must be a date-time"},
