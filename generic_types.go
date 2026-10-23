@@ -275,7 +275,7 @@ func (r *schemaRegistry) schemaForTypeText(text string) map[string]interface{} {
 		return copySchema(known)
 	}
 	if primitive := goIdentToOpenAPIType(stripPackagePrefix(text)); primitive != "object" {
-		return map[string]interface{}{"type": primitive}
+		return primitiveSchema(stripPackagePrefix(text))
 	}
 	return r.refOrObject(stripPackagePrefix(text), text)
 }

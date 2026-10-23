@@ -684,6 +684,10 @@ func applyTagConstraints(schema map[string]interface{}, tag string) {
 			values = append(values, typedTagValue(strings.TrimSpace(part), schema))
 		}
 		if len(values) > 0 {
+			if permitsNull(schema) {
+				// The schema already admits null, and an enum lists every allowed value.
+				values = append(values, nil)
+			}
 			schema["enum"] = values
 		}
 	}
@@ -785,7 +789,7 @@ func resolveFieldTypeAST(expr ast.Expr, reg *schemaRegistry) map[string]interfac
 			return copySchema(arg.schema)
 		}
 		if primitive := goIdentToOpenAPIType(t.Name); primitive != "object" {
-			return map[string]interface{}{"type": primitive}
+			return primitiveSchema(t.Name)
 		}
 		// A non-primitive identifier is a type declared in this package.
 		return reg.refOrObject(t.Name, t.Name)
@@ -967,6 +971,21 @@ func goIdentToOpenAPIType(ident string) string {
 	default:
 		return "object"
 	}
+}
+
+// primitiveSchema describes a Go basic type: its JSON type, and the OpenAPI format of the
+// sizes that have one (int32, int64, float, double), so a client knows the range it holds.
+func primitiveSchema(ident string) map[string]interface{} {
+	schema := map[string]interface{}{"type": goIdentToOpenAPIType(ident)}
+	switch ident {
+	case "int32", "int64":
+		schema["format"] = ident
+	case "float32":
+		schema["format"] = "float"
+	case "float64":
+		schema["format"] = "double"
+	}
+	return schema
 }
 
 // ---------------------------------------------------------------------------

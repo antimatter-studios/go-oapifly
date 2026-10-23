@@ -278,7 +278,7 @@ func TestRegistryParameters(t *testing.T) {
 	}
 	id := get.Parameters[0]
 	if id.Name != "id" || id.In != "path" || !id.Required || id.Description != "The domain's id" ||
-		asJSON(t, id.Schema) != `{"type":"integer"}` {
+		asJSON(t, id.Schema) != `{"format":"int64","type":"integer"}` {
 		t.Fatalf("path parameter: %+v", id)
 	}
 	if get.RequestBody != nil {
