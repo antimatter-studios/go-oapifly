@@ -209,6 +209,23 @@ generator.Register(
 
 The document describes a slice or map field without `omitempty` as a required array or object, never `null`, so a client gets `T[]` and needs no null check. Go's `encoding/json` writes a nil slice or map as `null`, so call `oapifly.EmptyLists(response)` just before encoding a response. It returns a copy with every nil list it would write replaced by `[]` (and every nil map by `{}`). Fields that are `omitempty`, tagged `json:"-"`, unexported, or a `[]byte` are left alone, as encoding/json leaves them. A field where null means something different from empty belongs in its own, explicitly nullable field.
 
+## Struct schemas are closed
+
+A struct is described as a closed object, `additionalProperties: false`, whichever path describes it: a property the struct does not declare is refused. A response that starts leaking a field (a storage path, a hash, a token) then no longer matches its own description, and a contract tester can expect a request with an unknown field to be refused. A map is still an open object whose values follow the map's value type.
+
+- An embedded struct's fields are the object's own, as Go marshals them, so they are allowed.
+- A nullable reference is `allOf` around the closed component, which stays satisfiable and still refuses what the component does not declare.
+- Open one struct with a field tagged `oapi:"open"`, usually a blank one. A struct that embeds an open struct is open too, and so is one embedding a type the scanner cannot read, since its schema could not name those fields:
+
+  ```go
+  type Settings struct {
+      _     struct{} `oapi:"open"`
+      Theme string   `json:"theme"`
+  }
+  ```
+
+- `Config.OpenStructs: true` describes every struct as open, as releases before v0.18.0 did, for an API whose server accepts and ignores unknown fields.
+
 ## How it works
 
 1. **Glob** your source files using the configured `ScanPatterns`

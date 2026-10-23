@@ -97,6 +97,7 @@ func (g *Generator) generate() map[string]interface{} {
 	g.Warnings = nil
 
 	reg := newSchemaRegistry(g.Config.TypeDirs)
+	reg.openStructs = g.Config.OpenStructs
 	paths := map[string]map[string]PathItem{}
 	// Which of a path's methods were named by a handler of their own, as opposed to filled in
 	// by a catch-all route.

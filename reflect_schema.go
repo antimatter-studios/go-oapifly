@@ -134,9 +134,13 @@ func (r *schemaRegistry) componentName(t reflect.Type) string {
 func (r *schemaRegistry) reflectStructBody(t reflect.Type) map[string]interface{} {
 	props := map[string]interface{}{}
 	var required []string
+	open := r.openStructs
 
 	for i := 0; i < t.NumField(); i++ {
 		f := t.Field(i)
+		if opensSchema(string(f.Tag)) {
+			open = true
+		}
 		jsonTag, hasJSON := f.Tag.Lookup("json")
 		name, opts, _ := strings.Cut(jsonTag, ",")
 
@@ -154,6 +158,9 @@ func (r *schemaRegistry) reflectStructBody(t reflect.Type) map[string]interface{
 				}
 				if embeddedRequired, ok := body["required"].([]string); ok {
 					required = append(required, embeddedRequired...)
+				}
+				if !isClosed(body) {
+					open = true
 				}
 				continue
 			}
@@ -183,5 +190,6 @@ func (r *schemaRegistry) reflectStructBody(t reflect.Type) map[string]interface{
 	if len(required) > 0 {
 		result["required"] = required
 	}
+	closeUnlessOpen(result, open)
 	return result
 }
