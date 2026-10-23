@@ -1,0 +1,24 @@
+version: "3"
+
+# go-oapifly's tasks, the same commands CI runs. Run `chore` with no arguments to list them.
+
+tasks:
+  test:
+    desc: Run the tests; every document a test generates is validated as OpenAPI 3.1
+    cmds:
+      - go test ./...
+
+  race:
+    desc: Run the tests with the race detector, as CI does
+    cmds:
+      - go test -race ./...
+
+  lint:
+    desc: Vet the code, as CI does
+    cmds:
+      - go vet ./...
+
+  release:next:
+    desc: Print the version the current commit gets when it lands on main
+    cmds:
+      - scripts/next-version.sh {{.CLI_ARGS}}
