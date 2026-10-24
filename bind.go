@@ -288,6 +288,18 @@ var (
 // rules. Walking the JSON rather than the decoded value is what tells a field left out from
 // one sent as its zero value.
 func (b Binder) check(raw json.RawMessage, t reflect.Type, tag reflect.StructTag, path string, out Violations) {
+	if _, stated, _ := statedSchema(string(tag)); stated {
+		// The field states its JSON type (#46): the value is checked against that, not the Go
+		// type, which cannot say it.
+		if isNull(raw) {
+			if t.Kind() != reflect.Pointer {
+				out[at(path)] = "must not be null"
+			}
+			return
+		}
+		checkStated(raw, tag, path, out)
+		return
+	}
 	if known, ok := qualifiedJSONTypes[qualifiedName(t)]; ok && len(known) == 0 {
 		// json.RawMessage: whatever the client sent.
 		return

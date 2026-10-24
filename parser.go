@@ -748,6 +748,17 @@ func buildSchemaFromStructAST(st *ast.StructType, reg *schemaRegistry) map[strin
 		}
 
 		schema := resolveFieldTypeAST(field.Type, reg)
+		if field.Tag != nil {
+			if stated, ok, problem := statedSchema(strings.Trim(field.Tag.Value, "`")); problem != "" {
+				reg.warn("field %s: %s; it is described by its Go type", jsonName, problem)
+			} else if ok {
+				// The field says what its JSON is, which its Go type cannot (#46).
+				schema = stated
+				if _, pointer := field.Type.(*ast.StarExpr); pointer {
+					schema = asNullable(schema)
+				}
+			}
+		}
 		applyFieldConstraints(schema, field)
 		props[jsonName] = schema
 
