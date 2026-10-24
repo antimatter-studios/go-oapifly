@@ -229,15 +229,28 @@ func parseParameter(dst reflect.Value, raw string) (string, error) {
 }
 
 func (b Binder) bindBody(dst reflect.Value, media string, body []byte, out Violations) error {
-	if media != "" && media != "application/json" && !strings.HasSuffix(media, "+json") {
-		// A body that is not JSON is handed over as it is.
-		switch {
-		case dst.Kind() == reflect.String:
+	if media != "" && !isJSONMedia(media) {
+		// A body that is not JSON is handed over as it is. A pointer field is an optional
+		// body: left nil when the request has none (#50).
+		field := dst.Type()
+		text := field
+		if text.Kind() == reflect.Pointer {
+			text = text.Elem()
+		}
+		if text.Kind() != reflect.String && (text.Kind() != reflect.Slice || text.Elem().Kind() != reflect.Uint8) {
+			return fmt.Errorf("oapifly: a %s body must be a string or []byte field, or a pointer to one, not %s", media, field)
+		}
+		if field.Kind() == reflect.Pointer {
+			if len(body) == 0 {
+				return nil
+			}
+			dst.Set(reflect.New(text))
+			dst = dst.Elem()
+		}
+		if text.Kind() == reflect.String {
 			dst.SetString(string(body))
-		case dst.Kind() == reflect.Slice && dst.Type().Elem().Kind() == reflect.Uint8:
+		} else {
 			dst.SetBytes(append([]byte(nil), body...))
-		default:
-			return fmt.Errorf("oapifly: a %s body must be a string or []byte field, not %s", media, dst.Type())
 		}
 		return nil
 	}

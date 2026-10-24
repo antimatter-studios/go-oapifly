@@ -36,8 +36,9 @@ type Endpoint struct {
 	// `description:"..."` tag describes a parameter, and the constraint tags (enums, format,
 	// example, minimum, maximum, minLength, maxLength, pattern, minItems, maxItems) constrain
 	// it the same way they constrain a body field. `body:"<media type>"` names a body that is
-	// not application/json. Bind reads a request into this type and enforces what is
-	// described.
+	// not application/json, a string or []byte field. A body field that is a pointer is
+	// optional, described with required false. Bind reads a request into this type and
+	// enforces what is described.
 	Request reflect.Type
 
 	// Responses are the answers the operation can give, one per status.
@@ -227,7 +228,13 @@ func endpointRequest(route, path string, t reflect.Type, reg *schemaRegistry) ([
 						media = "application/json"
 					}
 					required := f.Type.Kind() != reflect.Pointer
-					body = jsonBody(reg.reflectSchema(f.Type), media)
+					described := f.Type
+					if !required && !isJSONMedia(media) {
+						// An optional body that is not JSON is left out, never JSON null: it is
+						// described as what it is when it is there (#50).
+						described = f.Type.Elem()
+					}
+					body = jsonBody(reg.reflectSchema(described), media)
 					body.Required = required
 				default:
 					if f.IsExported() && f.Tag.Get("json") != "-" {
