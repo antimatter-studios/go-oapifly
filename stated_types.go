@@ -49,7 +49,12 @@ func statedSchema(tag string) (schema map[string]interface{}, stated bool, probl
 func checkStated(raw json.RawMessage, tag reflect.StructTag, path string, out Violations) {
 	typ, items := strings.TrimSpace(tag.Get("type")), strings.TrimSpace(tag.Get("items"))
 	if !isJSONType(raw, typ) {
+		// A value of the wrong type says which it must be, unless the field words that
+		// itself (typeMessage, #58); the message tag is for the rules a value breaks.
 		out[at(path)] = "must be " + article(typ)
+		if message := tag.Get("typeMessage"); message != "" {
+			out[at(path)] = message
+		}
 		return
 	}
 	if typ != "array" {
@@ -74,7 +79,7 @@ func checkStated(raw json.RawMessage, tag reflect.StructTag, path string, out Vi
 	}
 	var list []json.RawMessage
 	_ = json.Unmarshal(raw, &list)
-	if problem := worded(itemsProblem(len(list), tag), tag); problem != "" {
+	if problem := worded(itemsProblem(len(list), tag))(tag); problem != "" {
 		out[at(path)] = problem
 	}
 	if items == "" {

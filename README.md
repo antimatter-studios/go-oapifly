@@ -313,6 +313,13 @@ err := oapifly.Bind(&req, func(in, name string) (string, bool) {
 - Types that read themselves (`time.Time`, `uuid.UUID`) are checked by reading them, and `json.RawMessage` accepts anything.
 - A field whose Go type cannot say what its JSON is (a `json.RawMessage`, or a named `[]byte` that writes JSON of its own) states it with `type:"string|integer|number|boolean|array|object"`, and an array's item type with `items:"..."`: `To json.RawMessage `+"`"+`json:"to" type:"array" items:"string"`+"`"+`. The stated type is what both description paths write, nullable for a pointer field, and what Bind checks the value against, with the other constraint tags on top. A type that is not one of those is reported, and the Go type kept.
 - A field's `message:"..."` tag replaces the wording for any of its constraints that does not hold, so an API keeps the messages its clients already show as its rules move into the type. A missing field is still `required`, and a value of the wrong type still says which type it must be.
+- One constraint can have its own words instead: `minLengthMessage`, `maxLengthMessage`, `patternMessage`, `enumsMessage`, `formatMessage`, `minimumMessage`, `maximumMessage`, `minItemsMessage` and `maxItemsMessage` each word theirs, and `message` the rest. `nullMessage` words a `null` where the field cannot be null, and `typeMessage` a value that is not a stated type.
+- A value can be held to several patterns, all of which it must match: `pattern`, then `pattern2`, `pattern3` and on, each with its own `…Message`. A schema has one `pattern`, so each further one is described as a branch of `allOf`:
+
+  ```go
+  // One line, as a struct tag must be.
+  Name string `json:"name" minLength:"1" maxLength:"100" pattern:"\\S" pattern2:"^[^\\x00-\\x1f\\x7f]*$" minLengthMessage:"required" patternMessage:"required" maxLengthMessage:"must be at most 100 characters" pattern2Message:"must not contain control characters"`
+  ```
 - Rules that depend on state, such as a name already being taken, stay in the handler and are documented as its error responses.
 
 ## Struct schemas are closed

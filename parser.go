@@ -902,6 +902,16 @@ func applyTagConstraints(schema map[string]interface{}, tag string) {
 		if pattern := extractTagValue(tag, "pattern"); pattern != "" {
 			schema["pattern"] = pattern
 		}
+		// A value must match every further pattern too, pattern2 and on (#58): a schema has
+		// one pattern, so each is a branch of allOf.
+		for i := 2; ; i++ {
+			pattern := extractTagValue(tag, "pattern"+strconv.Itoa(i))
+			if pattern == "" {
+				break
+			}
+			allOf, _ := schema["allOf"].([]interface{})
+			schema["allOf"] = append(allOf, map[string]interface{}{"pattern": pattern})
+		}
 	case "array":
 		keys = []string{"minItems", "maxItems"}
 	}
