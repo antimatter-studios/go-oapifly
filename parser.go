@@ -7,6 +7,7 @@ import (
 	"go/parser"
 	"go/token"
 	"os"
+	"path/filepath"
 	"reflect"
 	"strconv"
 	"strings"
@@ -76,7 +77,31 @@ type schemaRegistry struct {
 	// reflectOwners records which Go type each component registered by reflection belongs
 	// to, so two types sharing a short name are told apart instead of merged (#26).
 	reflectOwners map[string]reflect.Type
+
+	// declKeys and keyDecls tie each declaration the scanner describes, by its directory and
+	// name, to its component key, so one type is one component however it is reached (an
+	// annotation's models.Domain, a field's Domain), and two types sharing a name are two
+	// (#26).
+	declKeys map[typeDecl]string
+	keyDecls map[string]typeDecl
+
+	// scopeDir is the directory of the declaration being described: a bare name in it is its
+	// own package's. Empty outside one, for an annotation.
+	scopeDir string
+
+	// packages caches each TypeDirs directory's package name, as its files declare it.
+	packages map[string]string
+
+	// annotated is the component key of each type an annotation named, as written; located
+	// is the file each name was found in, by the scope and qualifier it was found from, so a
+	// type reached again is neither looked for nor reported again.
+	annotated map[string]string
+	located   map[string]string
 }
+
+// typeDecl is a type declaration the scanner describes: the directory declaring it, and its
+// name there.
+type typeDecl struct{ dir, name string }
 
 func newSchemaRegistry(typeDirs []string) *schemaRegistry {
 	return &schemaRegistry{
@@ -84,7 +109,125 @@ func newSchemaRegistry(typeDirs []string) *schemaRegistry {
 		typeDirs:       typeDirs,
 		resolving:      map[string]bool{},
 		genericOrigins: map[string]string{},
+		declKeys:       map[typeDecl]string{},
+		keyDecls:       map[string]typeDecl{},
+		packages:       map[string]string{},
+		annotated:      map[string]string{},
+		located:        map[string]string{},
 	}
+}
+
+// splitQualified splits pkg.Name into its qualifier and name; a bare name has no qualifier.
+func splitQualified(name string) (qualifier, short string) {
+	if idx := strings.LastIndex(name, "."); idx >= 0 {
+		return name[:idx], name[idx+1:]
+	}
+	return "", name
+}
+
+// locate finds the file declaring the type a name refers to (#26). qualifier is the package
+// it was written with, empty for a bare name, which is first looked for in the package of the
+// type being described (scopeDir), as Go reads it. A name declared in several TypeDirs that
+// neither says which is reported, and the first is taken. display is the name as written,
+// for the warning.
+func (r *schemaRegistry) locate(qualifier, name, display string) string {
+	cacheKey := r.scopeDir + "\x00" + qualifier + "\x00" + name
+	if file, ok := r.located[cacheKey]; ok {
+		return file
+	}
+	file := r.find(qualifier, name, display)
+	r.located[cacheKey] = file
+	return file
+}
+
+func (r *schemaRegistry) find(qualifier, name, display string) string {
+	files, alias := findTypeFiles(name, r.typeDirs)
+	switch len(files) {
+	case 0:
+		return alias
+	case 1:
+		return files[0]
+	}
+	if qualifier == "" && r.scopeDir != "" {
+		for _, file := range files {
+			if filepath.Dir(file) == r.scopeDir {
+				return file
+			}
+		}
+	}
+	if qualifier != "" {
+		var matching []string
+		for _, file := range files {
+			if r.packageName(filepath.Dir(file)) == qualifier {
+				matching = append(matching, file)
+			}
+		}
+		if len(matching) == 1 {
+			return matching[0]
+		}
+	}
+	dirs := make([]string, len(files))
+	for i, file := range files {
+		dirs[i] = filepath.Dir(file)
+	}
+	r.warn("type %s is declared in %s, and nothing says which is meant; the first is described: name it with its package",
+		display, strings.Join(dirs, ", "))
+	return files[0]
+}
+
+// componentKey is the component a declaration is described as: its name while no other
+// declaration holds that name, else its package's name and its own (#26). The key is held
+// from the first call, so a type reaching itself refers to the key it is being described as.
+func (r *schemaRegistry) componentKey(file, name string) string {
+	decl := typeDecl{dir: filepath.Dir(file), name: name}
+	if key, ok := r.declKeys[decl]; ok {
+		return key
+	}
+	key := sanitizeComponentKey(name)
+	if holder, taken := r.keyDecls[key]; taken && holder != decl {
+		qualified := sanitizeComponentKey(r.packageName(decl.dir) + "." + name)
+		if other, taken := r.keyDecls[qualified]; taken && other != decl {
+			qualified = sanitizeComponentKey(strings.ReplaceAll(strings.Trim(decl.dir, "/"), "/", ".") + "." + name)
+		}
+		r.warn("%s in %s and %s in %s share the name %s; the second is described as %s",
+			name, holder.dir, name, decl.dir, key, qualified)
+		key = qualified
+	}
+	r.declKeys[decl] = key
+	r.keyDecls[key] = decl
+	return key
+}
+
+// releaseKey gives a key back when the declaration turned out not to be a struct, which is
+// inlined rather than made a component.
+func (r *schemaRegistry) releaseKey(file, name string) {
+	decl := typeDecl{dir: filepath.Dir(file), name: name}
+	if key, ok := r.declKeys[decl]; ok {
+		delete(r.declKeys, decl)
+		delete(r.keyDecls, key)
+	}
+}
+
+// packageName is the package dir's files declare, its directory's name when none can be read.
+func (r *schemaRegistry) packageName(dir string) string {
+	if name, ok := r.packages[dir]; ok {
+		return name
+	}
+	name := filepath.Base(dir)
+	if entries, err := os.ReadDir(dir); err == nil {
+		for _, entry := range entries {
+			if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".go") {
+				continue
+			}
+			file, err := parser.ParseFile(token.NewFileSet(), filepath.Join(dir, entry.Name()), nil, parser.PackageClauseOnly)
+			if err == nil {
+				name = strings.TrimSuffix(file.Name.Name, "_test")
+				break
+			}
+		}
+	}
+	r.packages[dir] = name
+	return name
 }
 
 func (r *schemaRegistry) warn(format string, args ...interface{}) {
@@ -125,36 +268,53 @@ func (r *schemaRegistry) resolve(refType string) string {
 		return r.resolveGeneric(base, args, refType)
 	}
 
-	refName := strings.TrimPrefix(refType, "types.")
-	if _, known := r.schemas[refName]; known {
-		return refName
+	refName := strings.TrimSpace(refType)
+	if key, known := r.annotated[refName]; known {
+		return key
+	}
+	// types.X is the annotations' way of saying X, the name it is keyed by when nothing
+	// declares it; a bare name already registered is that component.
+	bare := strings.TrimPrefix(refName, "types.")
+	qualifier, shortName := splitQualified(refName)
+	if !strings.Contains(bare, ".") {
+		if _, known := r.schemas[bare]; known {
+			return bare
+		}
+		if schema, ok := openAPIPrimitiveSchema(bare); ok {
+			r.schemas[bare] = schema
+			return bare
+		}
 	}
 
-	if schema, ok := openAPIPrimitiveSchema(refName); ok {
-		r.schemas[refName] = schema
-		return refName
-	}
-
-	shortName := stripPackagePrefix(refName)
-	typeFile := findTypeFile(shortName, r.typeDirs)
+	// The declaration is found and keyed as a field's is, so the type an annotation names
+	// as models.Domain and a field reaches as Domain is one component (#26).
+	typeFile := r.locate(qualifier, shortName, refType)
 	if typeFile == "" {
 		r.warn("type %s named by an annotation is not in any configured TypeDirs, described as an untyped object", refType)
-		r.schemas[refName] = map[string]interface{}{"type": "object"}
-		return refName
+		r.schemas[bare] = map[string]interface{}{"type": "object"}
+		r.annotated[refName] = bare
+		return bare
+	}
+	key := r.componentKey(typeFile, shortName)
+	r.annotated[refName] = key
+	if _, known := r.schemas[key]; known {
+		return key
 	}
 
 	// The same resolver the field path uses, so a declaration that is not a struct - a named
 	// string, an alias to another package's type - is described as what it is rather than
 	// abandoned. Describing `type DeviceType string` as an object rejects the plain string
 	// the handler sends.
+	r.resolving[key] = true
 	schema, _ := r.inOwnScope(shortName, typeFile)
+	delete(r.resolving, key)
 	if schema == nil {
 		r.warn("type %s in %s has no schema this generator can express, described as an untyped object", refType, typeFile)
 		schema = map[string]interface{}{"type": "object"}
 	}
 
-	r.schemas[refName] = schema
-	return refName
+	r.schemas[key] = schema
+	return key
 }
 
 // openAPIPrimitiveSchema reports the schema for a token that names an OpenAPI type rather
@@ -509,20 +669,21 @@ func (r *schemaRegistry) embeddedFields(expr ast.Expr) (map[string]interface{}, 
 		return nil, nil, true
 	}
 
-	if r.resolving[name] {
-		// Reached from its own definition further up the stack; the fields are already there.
-		return nil, nil, false
-	}
-
-	typeFile := findTypeFile(name, r.typeDirs)
+	qualifier, _ := splitQualified(display)
+	typeFile := r.locate(qualifier, name, display)
 	if typeFile == "" {
 		r.warn("embedded type %s is not in any configured TypeDirs, its fields are missing from the schema", display)
 		return nil, nil, true
 	}
+	guard := "embedded " + filepath.Dir(typeFile) + " " + name
+	if r.resolving[guard] {
+		// Reached from its own definition further up the stack; the fields are already there.
+		return nil, nil, false
+	}
 
-	r.resolving[name] = true
+	r.resolving[guard] = true
 	schema, isStruct := r.inOwnScope(name, typeFile)
-	delete(r.resolving, name)
+	delete(r.resolving, guard)
 
 	if !isStruct || schema == nil {
 		r.warn("embedded type %s in %s is not a struct, its fields are missing from the schema", display, typeFile)
@@ -942,26 +1103,28 @@ func copySchema(src map[string]interface{}) map[string]interface{} {
 // returns, so the spec stays usable, and the warning says which type is missing and which
 // directory would have to be scanned to describe it.
 func (r *schemaRegistry) refOrObject(typeName, displayName string) map[string]interface{} {
-	if r.resolving[typeName] {
-		// Already being built further up the stack; the ref is still correct.
-		return map[string]interface{}{"$ref": "#/components/schemas/" + typeName}
-	}
-
-	if _, known := r.schemas[typeName]; known {
-		return map[string]interface{}{"$ref": "#/components/schemas/" + typeName}
-	}
-
-	typeFile := findTypeFile(typeName, r.typeDirs)
+	qualifier, _ := splitQualified(displayName)
+	typeFile := r.locate(qualifier, typeName, displayName)
 	if typeFile == "" {
 		r.warn("type %s is not in any configured TypeDirs, described as an untyped object", displayName)
 		return map[string]interface{}{"type": "object"}
 	}
+	key := r.componentKey(typeFile, typeName)
+	ref := map[string]interface{}{"$ref": "#/components/schemas/" + key}
+	if r.resolving[key] {
+		// Already being built further up the stack; the ref is still correct.
+		return ref
+	}
+	if _, known := r.schemas[key]; known {
+		return ref
+	}
 
-	r.resolving[typeName] = true
+	r.resolving[key] = true
 	schema, isStruct := r.inOwnScope(typeName, typeFile)
-	delete(r.resolving, typeName)
+	delete(r.resolving, key)
 
 	if schema == nil {
+		r.releaseKey(typeFile, typeName)
 		r.warn("type %s in %s has no schema this generator can express, described as an untyped object", displayName, typeFile)
 		return map[string]interface{}{"type": "object"}
 	}
@@ -971,11 +1134,12 @@ func (r *schemaRegistry) refOrObject(typeName, displayName string) map[string]in
 	// registering it as an object would describe a plain string as an object, which is the
 	// same class of lie this change exists to remove.
 	if !isStruct {
+		r.releaseKey(typeFile, typeName)
 		return schema
 	}
 
-	r.schemas[typeName] = schema
-	return map[string]interface{}{"$ref": "#/components/schemas/" + typeName}
+	r.schemas[key] = schema
+	return ref
 }
 
 // goIdentToOpenAPIType maps Go type identifiers to OpenAPI types.
@@ -1509,17 +1673,28 @@ func buildPathItem(routerPath string, tags tagSet, reg *schemaRegistry) PathItem
 // Type file discovery
 // ---------------------------------------------------------------------------
 
-// findTypeFile searches dirs for a Go file containing a type with the given name.
-// A compatibility shim declaring `Thing = other.Thing` is a signpost, not a declaration.
-// Taking it because its directory came first describes the type it points at as an object
-// accepting anything, so an alias is only used when nothing declares the type outright.
+// findTypeFile searches dirs for a Go file containing a type with the given name: the first
+// declaration, in TypeDirs order. A compatibility shim declaring `Thing = other.Thing` is a
+// signpost, not a declaration. Taking it because its directory came first describes the type
+// it points at as an object accepting anything, so an alias is only used when nothing
+// declares the type outright.
 func findTypeFile(typeName string, dirs []string) string {
-	var aliasPath string
+	files, alias := findTypeFiles(typeName, dirs)
+	if len(files) > 0 {
+		return files[0]
+	}
+	return alias
+}
+
+// findTypeFiles lists every file in dirs declaring typeName outright, one per directory, in
+// TypeDirs order, and the first alias declaring it, for when nothing does (#26).
+func findTypeFiles(typeName string, dirs []string) (files []string, aliasPath string) {
 	for _, dir := range dirs {
 		entries, err := os.ReadDir(dir)
 		if err != nil {
 			continue
 		}
+	directory:
 		for _, entry := range entries {
 			if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".go") {
 				continue
@@ -1537,10 +1712,7 @@ func findTypeFile(typeName string, dirs []string) string {
 				}
 				for _, spec := range genDecl.Specs {
 					typeSpec, ok := spec.(*ast.TypeSpec)
-					if !ok {
-						continue
-					}
-					if typeSpec.Name.Name != typeName {
+					if !ok || typeSpec.Name.Name != typeName {
 						continue
 					}
 					if typeSpec.Assign.IsValid() {
@@ -1549,12 +1721,13 @@ func findTypeFile(typeName string, dirs []string) string {
 						}
 						continue
 					}
-					return path
+					files = append(files, path)
+					break directory
 				}
 			}
 		}
 	}
-	return aliasPath
+	return files, aliasPath
 }
 
 // anyValueSchemaName names the component describing a value this API deliberately does not
