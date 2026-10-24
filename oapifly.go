@@ -24,7 +24,6 @@ package oapifly
 
 import (
 	"encoding/json"
-	"fmt"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -39,7 +38,11 @@ type Generator struct {
 
 	// Warnings collects non-fatal issues encountered during generation
 	// (e.g. files that failed to parse). Reset on each call to Generate.
+	// Each is the Message of a Warning in Report.
 	Warnings []string
+
+	// report is Warnings as values, in the order they were found.
+	report []Warning
 
 	// cached holds the generated spec after the first call to Generate.
 	// Source files don't change at runtime, so the spec is computed once.
@@ -95,6 +98,7 @@ func (g *Generator) generate() map[string]interface{} {
 	}
 
 	g.Warnings = nil
+	g.report = nil
 
 	reg := newSchemaRegistry(g.Config.TypeDirs)
 	reg.openStructs = g.Config.OpenStructs
@@ -111,14 +115,14 @@ func (g *Generator) generate() map[string]interface{} {
 		// Registered operations need no source on disk; patterns that match nothing are
 		// still worth knowing about.
 		if len(g.Config.ScanPatterns) > 0 {
-			g.Warnings = append(g.Warnings, "No files found for scan patterns: "+strings.Join(g.Config.ScanPatterns, ", "))
+			reg.warn(Warning{Kind: WarnScanMatchedNothing}, "No files found for scan patterns: %s", strings.Join(g.Config.ScanPatterns, ", "))
 		}
 	}
 
 	for _, file := range files {
-		astFile, err := parseFile(file)
+		astFile, fset, err := parseFileSet(file)
 		if err != nil {
-			g.Warnings = append(g.Warnings, fmt.Sprintf("failed to parse %s: %v", file, err))
+			reg.warn(Warning{Kind: WarnSourceUnparsable, File: file}, "failed to parse %s: %v", file, err)
 			continue
 		}
 		handlers := extractHandlerDocs(astFile)
@@ -131,9 +135,12 @@ func (g *Generator) generate() map[string]interface{} {
 				if path == "" || method == "" {
 					continue
 				}
+				restore := reg.describing(Warning{OperationID: tags.get("ID"), Method: strings.ToUpper(method), Path: path,
+					Tags: annotatedTags(tags), File: file, Line: fset.Position(tags.pos).Line})
 				methods, usable := methodsFor(method)
 				if !usable {
-					g.Warnings = append(g.Warnings, fmt.Sprintf("%s %s: '%s' is not a method a Path Item Object may carry, route not described", strings.ToUpper(method), path, method))
+					reg.warn(Warning{Kind: WarnMethodNotDescribable}, "%s %s: '%s' is not a method a Path Item Object may carry, route not described", strings.ToUpper(method), path, method)
+					restore()
 					continue
 				}
 				if _, ok := paths[path]; !ok {
@@ -152,12 +159,13 @@ func (g *Generator) generate() map[string]interface{} {
 						}
 					} else {
 						if describedMethods[path][m] {
-							g.Warnings = append(g.Warnings, fmt.Sprintf("duplicate handler for %s %s, overwriting previous", strings.ToUpper(m), path))
+							reg.warn(Warning{Kind: WarnRouteDescribedTwice}, "duplicate handler for %s %s, overwriting previous", strings.ToUpper(m), path)
 						}
 						describedMethods[path][m] = true
 					}
 					paths[path][m] = item
 				}
+				restore()
 			}
 		}
 		// A struct carrying a @Schema annotation is registered the same way a type named by
@@ -174,12 +182,23 @@ func (g *Generator) generate() map[string]interface{} {
 
 	// A link's target can only be checked once every operation has been read, since an
 	// operation may be linked to from a file parsed before its own.
-	reportUnknownLinkTargets(paths, reg.warn)
+	reportUnknownLinkTargets(paths, reg)
+
+	reportUndefinedSchemes(reg, Warning{}, "Config.Security", g.Config.Security, g.Config.SecuritySchemes)
+	for _, path := range sortedPaths(paths) {
+		for _, method := range pathItemMethods {
+			if item, ok := paths[path][method]; ok && item.Security != nil {
+				about := Warning{OperationID: item.OperationID, Method: strings.ToUpper(method), Path: path, Tags: item.Tags}
+				reportUndefinedSchemes(reg, about, strings.ToUpper(method)+" "+path, *item.Security, g.Config.SecuritySchemes)
+			}
+		}
+	}
 
 	// Types the registry could not describe are reported to the caller rather than left in
 	// the spec as unexplained untyped objects, so a missing TypeDirs entry is visible at
 	// generation time instead of surfacing later as a contract test that cannot fail.
 	g.Warnings = append(g.Warnings, reg.warnings...)
+	g.report = reg.report
 
 	info := map[string]string{"title": g.Config.Title, "version": g.Config.Version}
 	if g.Config.Description != "" {
@@ -202,15 +221,6 @@ func (g *Generator) generate() map[string]interface{} {
 	}
 	if len(g.Config.Security) > 0 {
 		g.cached["security"] = *requirementsOf(g.Config.Security)
-	}
-	g.Warnings = append(g.Warnings, undefinedSchemes("Config.Security", g.Config.Security, g.Config.SecuritySchemes)...)
-	for _, path := range sortedPaths(paths) {
-		for _, method := range pathItemMethods {
-			if item, ok := paths[path][method]; ok && item.Security != nil {
-				where := strings.ToUpper(method) + " " + path
-				g.Warnings = append(g.Warnings, undefinedSchemes(where, *item.Security, g.Config.SecuritySchemes)...)
-			}
-		}
 	}
 	if documentGenerated != nil {
 		documentGenerated(g.cached)

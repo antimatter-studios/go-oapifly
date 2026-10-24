@@ -109,7 +109,7 @@ func annotatedSecurity(route string, lines []string, reg *schemaRegistry) *[]Sec
 	for _, line := range lines {
 		requirements, err := parseSecurityTag(line)
 		if err != nil {
-			reg.warn("%s: @Security %s: %v, the line is left out", route, line, err)
+			reg.warn(Warning{Kind: WarnAnnotationUnreadable}, "%s: @Security %s: %v, the line is left out", route, line, err)
 			continue
 		}
 		all = append(all, requirements...)
@@ -120,10 +120,10 @@ func annotatedSecurity(route string, lines []string, reg *schemaRegistry) *[]Sec
 	return requirementsOf(all)
 }
 
-// undefinedSchemes reports every requirement that names a scheme the document does not
-// define: a client reading it could not tell how to authenticate.
-func undefinedSchemes(where string, requirements []SecurityRequirement, schemes map[string]SecurityScheme) []string {
-	var warnings []string
+// reportUndefinedSchemes reports every requirement that names a scheme the document does not
+// define: a client reading it could not tell how to authenticate. about is the operation
+// the requirements are, empty for Config.Security.
+func reportUndefinedSchemes(reg *schemaRegistry, about Warning, where string, requirements []SecurityRequirement, schemes map[string]SecurityScheme) {
 	for _, requirement := range requirements {
 		names := make([]string, 0, len(requirement))
 		for name := range requirement {
@@ -132,11 +132,12 @@ func undefinedSchemes(where string, requirements []SecurityRequirement, schemes 
 		sort.Strings(names)
 		for _, name := range names {
 			if _, ok := schemes[name]; !ok {
-				warnings = append(warnings, fmt.Sprintf("%s: security scheme %q is not defined in Config.SecuritySchemes", where, name))
+				w := about
+				w.Kind, w.Scheme = WarnSecuritySchemeUndefined, name
+				reg.warn(w, "%s: security scheme %q is not defined in Config.SecuritySchemes", where, name)
 			}
 		}
 	}
-	return warnings
 }
 
 func sortedPaths(paths map[string]map[string]PathItem) []string {

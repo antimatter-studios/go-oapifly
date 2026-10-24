@@ -33,6 +33,10 @@ type Config struct {
 	// any one of which is enough. An operation overrides it with its own requirements, or
 	// with Public. Empty means an operation that states nothing needs no credential.
 	Security []SecurityRequirement
+
+	// Strict makes the warnings within it errors: Report marks them, and Check
+	// returns them (#31). The zero value makes none strict.
+	Strict StrictScope
 }
 
 // Parameter represents an OpenAPI parameter (path, query, or header).

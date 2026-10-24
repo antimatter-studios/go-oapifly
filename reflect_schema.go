@@ -60,7 +60,7 @@ func (r *schemaRegistry) reflectSchema(t reflect.Type) map[string]interface{} {
 		return primitiveSchema(t.Kind().String())
 	}
 
-	r.warn("type %s has no JSON form this generator can express, described as an untyped object", t)
+	r.warn(Warning{Kind: WarnTypeUnexpressible, Type: typeDisplay(t)}, "type %s has no JSON form this generator can express, described as an untyped object", t)
 	return map[string]interface{}{"type": "object"}
 }
 
@@ -118,9 +118,9 @@ func (r *schemaRegistry) componentName(t reflect.Type) string {
 
 	qualified := sanitizeComponentKey(strings.ReplaceAll(t.PkgPath(), "/", ".")) + "." + name
 	if other, ok := r.reflectOwners[qualified]; ok && other != t {
-		r.warn("types %s and %s both reduce to component %s", typeDisplay(other), typeDisplay(t), qualified)
+		r.warn(Warning{Kind: WarnComponentNameCollision, Type: typeDisplay(t)}, "types %s and %s both reduce to component %s", typeDisplay(other), typeDisplay(t), qualified)
 	} else if !ok {
-		r.warn("%s and %s share the name %s; the second is described as %s",
+		r.warn(Warning{Kind: WarnComponentNameCollision, Type: typeDisplay(t)}, "%s and %s share the name %s; the second is described as %s",
 			typeDisplay(owner), typeDisplay(t), name, qualified)
 	}
 	r.reflectOwners[qualified] = t
@@ -175,7 +175,7 @@ func (r *schemaRegistry) reflectStructBody(t reflect.Type) map[string]interface{
 
 		schema := r.reflectSchema(f.Type)
 		if stated, ok, problem := statedSchema(string(f.Tag)); problem != "" {
-			r.warn("%s field %s: %s; it is described by its Go type", typeDisplay(t), f.Name, problem)
+			r.warn(Warning{Kind: WarnStatedTypeInvalid, Type: typeDisplay(t), Field: f.Name}, "%s field %s: %s; it is described by its Go type", typeDisplay(t), f.Name, problem)
 		} else if ok {
 			// The field says what its JSON is, which its Go type cannot (#46).
 			schema = stated

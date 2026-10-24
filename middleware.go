@@ -174,7 +174,7 @@ func effectiveSecurity(route string, own []SecurityRequirement, middleware []Mid
 		security = defaults
 	}
 	if len(security) == 0 {
-		reg.warn("%s: its middleware requires %s, but the operation needs no credential to hold them with",
+		reg.warn(Warning{Kind: WarnMiddlewareCredentialMissing}, "%s: its middleware requires %s, but the operation needs no credential to hold them with",
 			route, strings.Join(roles, ", "))
 		return security
 	}
@@ -228,7 +228,7 @@ func attachHeaders(route string, lines []string, responses map[string]Response, 
 	for _, line := range lines {
 		statuses, name, header, ok := parseHeaderTag(line)
 		if !ok {
-			reg.warn("%s: @Header %s needs a status, a {type} and a name, the line is left out", route, line)
+			reg.warn(Warning{Kind: WarnAnnotationUnreadable}, "%s: @Header %s needs a status, a {type} and a name, the line is left out", route, line)
 			continue
 		}
 		for _, status := range statuses {
@@ -243,7 +243,7 @@ func attachHeaders(route string, lines []string, responses map[string]Response, 
 			for _, target := range targets {
 				resp, exists := responses[target]
 				if !exists {
-					reg.warn("%s: @Header %s names response %s, which the operation does not describe", route, name, target)
+					reg.warn(Warning{Kind: WarnHeaderResponseUndescribed, Header: name, Status: target}, "%s: @Header %s names response %s, which the operation does not describe", route, name, target)
 					continue
 				}
 				if resp.Headers == nil {

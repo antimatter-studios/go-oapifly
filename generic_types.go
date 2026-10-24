@@ -179,7 +179,7 @@ func (r *schemaRegistry) resolveGeneric(base string, args []string, display stri
 	// reference or the type reaching itself, and both want the name and nothing else.
 	if previous, seen := r.genericOrigins[name]; seen {
 		if previous != display {
-			r.warn("%s and %s reduce to the same component name %s, so %s describes both; qualify or rename one of them",
+			r.warn(Warning{Kind: WarnComponentNameCollision, Type: display}, "%s and %s reduce to the same component name %s, so %s describes both; qualify or rename one of them",
 				previous, display, name, previous)
 		}
 		return name
@@ -189,7 +189,7 @@ func (r *schemaRegistry) resolveGeneric(base string, args []string, display stri
 	shortBase := stripPackagePrefix(base)
 	typeFile := findTypeFile(shortBase, r.typeDirs)
 	if typeFile == "" {
-		r.warn("generic type %s is not in any configured TypeDirs, described as an untyped object", display)
+		r.warn(Warning{Kind: WarnUnresolvedType, Type: display}, "generic type %s is not in any configured TypeDirs, described as an untyped object", display)
 		r.schemas[name] = map[string]interface{}{"type": "object"}
 		return name
 	}
@@ -223,11 +223,11 @@ func (r *schemaRegistry) schemaForInstantiation(shortBase string, args []string,
 
 			params := typeParamNames(typeSpec)
 			if len(params) == 0 {
-				r.warn("%s instantiates %s, which declares no type parameter; described as an untyped object", display, shortBase)
+				r.warn(Warning{Kind: WarnTypeArgumentsMismatch, Type: display, File: typeFile}, "%s instantiates %s, which declares no type parameter; described as an untyped object", display, shortBase)
 				return nil
 			}
 			if len(params) != len(args) {
-				r.warn("%s names %d argument(s) but %s declares %d type parameter(s); described as an untyped object",
+				r.warn(Warning{Kind: WarnTypeArgumentsMismatch, Type: display, File: typeFile}, "%s names %d argument(s) but %s declares %d type parameter(s); described as an untyped object",
 					display, len(args), shortBase, len(params))
 				return nil
 			}
@@ -287,7 +287,7 @@ func (r *schemaRegistry) schemaForTypeText(text string) map[string]interface{} {
 func (r *schemaRegistry) genericFieldSchema(base ast.Expr, indices []ast.Expr) map[string]interface{} {
 	baseName, ok := r.typeExprText(base)
 	if !ok {
-		r.warn("a generic field's type could not be named, described as an untyped object")
+		r.warn(Warning{Kind: WarnTypeUnnameable}, "a generic field's type could not be named, described as an untyped object")
 		return map[string]interface{}{"type": "object"}
 	}
 	args := make([]string, 0, len(indices))
@@ -296,7 +296,7 @@ func (r *schemaRegistry) genericFieldSchema(base ast.Expr, indices []ast.Expr) m
 		if !ok {
 			// A map, a func, a channel: legal Go this generator has no spelling for. The
 			// field stays an unconstrained object rather than a wrong shape, and says so.
-			r.warn("an argument of %s is a type this generator cannot name, described as an untyped object", baseName)
+			r.warn(Warning{Kind: WarnTypeUnnameable, Type: baseName}, "an argument of %s is a type this generator cannot name, described as an untyped object", baseName)
 			return map[string]interface{}{"type": "object"}
 		}
 		args = append(args, name)
