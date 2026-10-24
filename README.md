@@ -378,6 +378,54 @@ oapifly report --json --scan 'internal/handlers/*.go' --types internal/types    
 oapifly report --strict-tag Domains --scan 'internal/handlers/*.go'              # exit 1 for an error
 ```
 
+## Examples beside the document
+
+A document's examples are kept beside it, in `<document>-example.json`: `openapi.json` has `openapi-example.json` (`oapifly.ExamplesFileFor`). Agents and people can then find them without being told. The file is keyed by operationId and then by example name. Each entry pairs a request with the response it provokes:
+
+```json
+{
+  "createDomain": {
+    "created": {
+      "summary": "A new domain",
+      "request":  {"body": {"name": "example.test"}},
+      "response": {"status": 201, "body": {"data": {"id": 1, "name": "example.test"}}}
+    },
+    "missingName": {
+      "request":  {"body": {}, "invalid": true},
+      "response": {"status": 422}
+    }
+  },
+  "getDomain": {
+    "unknownId": {"request": {"path": {"id": 999999}}, "response": {"status": 404}}
+  }
+}
+```
+
+- A request has `path`, `query` and `header` values, by name, and a `body`. `mediaType` names the request media type the body is in, when there are several. `invalid: true` marks a request meant to break its schema, the request of a 400 or 422 pair.
+- A response has its `status`, and optionally its `body` and `mediaType`.
+
+Give the generator the file through an `fs.FS`, embedded as the rest of the server is, so nothing is read from disk at run time:
+
+```go
+//go:embed openapi-example.json
+var examples embed.FS
+
+generator := oapifly.New(oapifly.Config{Examples: examples, ExamplesFile: "openapi-example.json"})
+```
+
+Each pair goes into the document under its name: the request body into its media type's `examples`, each parameter value into the parameter's `examples`, and the response body into its response's. A contract tester pairs a request with the response of the same name. With a file set, these are warnings in the report, so strict mode can hold an area to them:
+- `example-orphaned`: a pair names an operation, parameter, body, status or media type the document does not have. It is left out, never deleted;
+- `example-invalid`: a JSON body does not validate against its schema, or a request marked invalid has one that does;
+- `example-missing`: a documented status that no pair shows;
+- `examples-unreadable`: the file cannot be read.
+
+`Generator.ExampleStubs()` returns the file with a stub added for every documented status no pair shows, for a person or an agent to fill in, and `oapifly.MarshalExamples` writes it the same way every time. For an annotated API:
+
+```sh
+oapifly examples sync  --file openapi-example.json --scan 'internal/handlers/*.go'   # add the stubs
+oapifly examples check --file openapi-example.json --scan 'internal/handlers/*.go'   # exit 1 on any problem
+```
+
 ## How it works
 
 1. **Glob** your source files using the configured `ScanPatterns`

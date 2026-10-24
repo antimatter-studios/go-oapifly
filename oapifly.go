@@ -184,6 +184,15 @@ func (g *Generator) generate() map[string]interface{} {
 	// operation may be linked to from a file parsed before its own.
 	reportUnknownLinkTargets(paths, reg)
 
+	if g.Config.Examples != nil {
+		file, err := ReadExamples(g.Config.Examples, g.Config.ExamplesFile)
+		if err != nil {
+			reg.warn(Warning{Kind: WarnExamplesUnreadable, File: g.Config.ExamplesFile}, "example file %s: %v", g.Config.ExamplesFile, err)
+		} else {
+			mergeExamples(paths, file, reg.schemas, reg)
+		}
+	}
+
 	reportUndefinedSchemes(reg, Warning{}, "Config.Security", g.Config.Security, g.Config.SecuritySchemes)
 	for _, path := range sortedPaths(paths) {
 		for _, method := range pathItemMethods {
