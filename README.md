@@ -197,6 +197,14 @@ generator.Register(
 
 - **Parameters:** fields tagged `path:"name"`, `query:"name"` and `header:"name"` are parameters. Query and header parameters are optional unless the tag says `,required`. A `description` tag describes one, and `enums`, `format` and `example` constrain it, as they do a body field.
 - **Body:** the field tagged `body:""` is the request body; `body:"<media type>"` names one that is not JSON, a `string` or `[]byte` field. A body field that is a pointer is optional (`required: false`): a JSON one is left nil when the request has no body, and so is one in another media type, `*string` or `*[]byte`. A request type with no parameter fields is the body itself.
+- **A body in several forms:** a tag may name several media types, comma-separated, and a request type may have a body field for each form it takes, each a pointer, with media types of their own. The document lists every media type under `requestBody.content`, and the body is required in one of them. Bind sets the field the request's `Content-Type` names, or the first when there is none:
+
+  ```go
+  type ReceiveReport struct {
+      Report *TLSReport `body:"application/tlsrpt+json,application/json"`
+      Gzip   *[]byte    `body:"application/tlsrpt+gzip"`
+  }
+  ```
 - **Responses:** each `EndpointResponse` has its own `MediaType` (JSON by default) and `Headers`. A response with a media type and no `Type`, or a `[]byte` under a media type that is not JSON, is a body of that type whose bytes are not described (a `message/rfc822` message, a download). One status may be registered once per media type, for an answer that comes in more than one.
 - **Schemas:** follow encoding/json, and are the same ones the annotation path produces for the same types:
   - `omitempty` is not required;
@@ -296,7 +304,7 @@ err := oapifly.Bind(&req, func(in, name string) (string, bool) {
 }, body)
 ```
 
-- `err` is `nil`, `oapifly.Violations` (answer 422 with the fields), an error wrapping `oapifly.ErrMalformedBody` (answer 400) for a body that is not JSON, is not the shape its type reads (an array for an object, or `null` where it cannot be), or is missing, or, for a request type that cannot be bound, a plain error.
+- `err` is `nil`, `oapifly.Violations` (answer 422 with the fields), an error wrapping `oapifly.ErrMalformedBody` (answer 400) for a body that is not JSON, is not the shape its type reads (an array for an object, or `null` where it cannot be), or is missing, an error wrapping `oapifly.ErrUnsupportedMediaType` (answer 415) for a body in a media type none of a type's several forms takes, or, for a request type that cannot be bound, a plain error. With one body form, the `Content-Type` is not checked.
 - Violations are keyed by parameter name (`limit`), or by the body field's JSON path (`owner.email`, `members[2].name`); the body as a whole is `body`. Every broken rule is reported, not just the first.
 - A parameter is required when it is in the path or its tag says `,required`. A body field without `omitempty` is required, and only a pointer field may be `null`.
 - Structs are closed: an undeclared property is refused unless the struct is open (see below). `oapifly.Binder{OpenStructs: true}.Bind` goes with `Config.OpenStructs`.
