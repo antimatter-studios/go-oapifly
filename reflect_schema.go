@@ -174,6 +174,15 @@ func (r *schemaRegistry) reflectStructBody(t reflect.Type) map[string]interface{
 		}
 
 		schema := r.reflectSchema(f.Type)
+		if stated, ok, problem := statedSchema(string(f.Tag)); problem != "" {
+			r.warn("%s field %s: %s; it is described by its Go type", typeDisplay(t), f.Name, problem)
+		} else if ok {
+			// The field says what its JSON is, which its Go type cannot (#46).
+			schema = stated
+			if f.Type.Kind() == reflect.Pointer {
+				schema = asNullable(schema)
+			}
+		}
 		applyTagConstraints(schema, string(f.Tag))
 		props[name] = schema
 
