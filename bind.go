@@ -372,7 +372,7 @@ func (b Binder) check(raw json.RawMessage, t reflect.Type, tag reflect.StructTag
 		// type, which cannot say it.
 		if isNull(raw) {
 			if t.Kind() != reflect.Pointer {
-				out[at(path)] = "must not be null"
+				out[at(path)] = nullWording(tag)
 			}
 			return
 		}
@@ -385,7 +385,7 @@ func (b Binder) check(raw json.RawMessage, t reflect.Type, tag reflect.StructTag
 	}
 	if isNull(raw) {
 		if t.Kind() != reflect.Pointer && t.Kind() != reflect.Interface && !nullableKnownType(t) {
-			out[at(path)] = "must not be null"
+			out[at(path)] = nullWording(tag)
 		}
 		return
 	}
@@ -447,7 +447,7 @@ func (b Binder) check(raw json.RawMessage, t reflect.Type, tag reflect.StructTag
 			out[at(path)] = "must be an array"
 			return
 		}
-		if problem := worded(itemsProblem(len(items), tag), tag); problem != "" {
+		if problem := worded(itemsProblem(len(items), tag))(tag); problem != "" {
 			out[at(path)] = problem
 		}
 		for i, item := range items {
@@ -618,45 +618,82 @@ func collectFields(t reflect.Type, into *structFields, visiting map[reflect.Type
 // valueProblem checks a scalar value against its field's constraint tags, the ones
 // applyTagConstraints describes, and says what is wrong with it.
 func valueProblem(v reflect.Value, tag reflect.StructTag) string {
-	return worded(constraintProblem(v, tag), tag)
+	return worded(constraintProblem(v, tag))(tag)
 }
 
-// worded is a field's own wording for a broken constraint, its message tag, when it has one:
-// an API keeps the words its clients already show while its rules move into the type.
-func worded(problem string, tag reflect.StructTag) string {
-	if problem == "" {
-		return ""
+// worded is a field's own wording for a broken constraint: the constraint's own message tag
+// (maxLengthMessage for maxLength, pattern2Message for pattern2, #58), else the message tag
+// for any of them, else the generator's. An API keeps the words its clients already show
+// while its rules move into the type.
+func worded(problem, constraint string) func(reflect.StructTag) string {
+	return func(tag reflect.StructTag) string {
+		if problem == "" {
+			return ""
+		}
+		if constraint != "" {
+			if message := tag.Get(constraint + "Message"); message != "" {
+				return message
+			}
+		}
+		if message := tag.Get("message"); message != "" {
+			return message
+		}
+		return problem
 	}
-	if message := tag.Get("message"); message != "" {
+}
+
+// nullWording is what a field that may not be null says when it is: its nullMessage tag, or
+// the generator's words. The message tag is for the rules a value breaks, not for its type.
+func nullWording(tag reflect.StructTag) string {
+	if message := tag.Get("nullMessage"); message != "" {
 		return message
 	}
-	return problem
+	return "must not be null"
 }
 
-func constraintProblem(v reflect.Value, tag reflect.StructTag) string {
+// patternsOf is a field's patterns in order, pattern then pattern2, pattern3 and on, each
+// with the tag key it is under: a value must match all of them (#58).
+func patternsOf(tag reflect.StructTag) (keys, values []string) {
+	for i := 1; ; i++ {
+		key := "pattern"
+		if i > 1 {
+			key += strconv.Itoa(i)
+		}
+		value := tag.Get(key)
+		if value == "" {
+			return keys, values
+		}
+		keys, values = append(keys, key), append(values, value)
+	}
+}
+
+// constraintProblem says what is wrong with v under its field's constraint tags, and which
+// constraint it breaks.
+func constraintProblem(v reflect.Value, tag reflect.StructTag) (problem, constraint string) {
 	if tag == "" {
-		return ""
+		return "", ""
 	}
 	switch v.Kind() {
 	case reflect.String:
 		s := v.String()
 		if enums := tag.Get("enums"); enums != "" && !oneOf(s, enums) {
-			return "must be one of " + listedQuoted(enums)
+			return "must be one of " + listedQuoted(enums), "enums"
 		}
 		length := utf8.RuneCountInString(s)
 		if n, ok := lengthBound(tag, "minLength"); ok && length < n {
-			return "must be at least " + counted(n, "character")
+			return "must be at least " + counted(n, "character"), "minLength"
 		}
 		if n, ok := lengthBound(tag, "maxLength"); ok && length > n {
-			return "must be at most " + counted(n, "character")
+			return "must be at most " + counted(n, "character"), "maxLength"
 		}
-		if pattern := tag.Get("pattern"); pattern != "" {
+		keys, values := patternsOf(tag)
+		for i, pattern := range values {
 			if re := compiledPattern(pattern); re != nil && !re.MatchString(s) {
-				return "must match " + pattern
+				return "must match " + pattern, keys[i]
 			}
 		}
 		if format := tag.Get("format"); format != "" && !formatHolds(format, s) {
-			return "must be a valid " + format
+			return "must be a valid " + format, "format"
 		}
 	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
 		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64,
@@ -672,26 +709,28 @@ func constraintProblem(v reflect.Value, tag reflect.StructTag) string {
 		}
 		kind := numberKind(v.Kind())
 		if enums := tag.Get("enums"); enums != "" && !numberOneOf(n, enums, kind) {
-			return "must be one of " + listed(enums)
+			return "must be one of " + listed(enums), "enums"
 		}
 		if bound, ok := numberBound(tag, "minimum", kind); ok && n < bound {
-			return "must be at least " + strconv.FormatFloat(bound, 'f', -1, 64)
+			return "must be at least " + strconv.FormatFloat(bound, 'f', -1, 64), "minimum"
 		}
 		if bound, ok := numberBound(tag, "maximum", kind); ok && n > bound {
-			return "must be at most " + strconv.FormatFloat(bound, 'f', -1, 64)
+			return "must be at most " + strconv.FormatFloat(bound, 'f', -1, 64), "maximum"
 		}
 	}
-	return ""
+	return "", ""
 }
 
-func itemsProblem(n int, tag reflect.StructTag) string {
+// itemsProblem says what is wrong with a list of n items under minItems and maxItems, and
+// which of them it breaks.
+func itemsProblem(n int, tag reflect.StructTag) (problem, constraint string) {
 	if bound, ok := lengthBound(tag, "minItems"); ok && n < bound {
-		return "must have at least " + counted(bound, "item")
+		return "must have at least " + counted(bound, "item"), "minItems"
 	}
 	if bound, ok := lengthBound(tag, "maxItems"); ok && n > bound {
-		return "must have at most " + counted(bound, "item")
+		return "must have at most " + counted(bound, "item"), "maxItems"
 	}
-	return ""
+	return "", ""
 }
 
 // counted is "1 item" or "3 items".
