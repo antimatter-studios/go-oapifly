@@ -1,5 +1,7 @@
 package oapifly
 
+import "io/fs"
+
 // Config holds the configuration for the OpenAPI generator.
 type Config struct {
 	// Title is the API title shown in the OpenAPI spec.
@@ -37,6 +39,15 @@ type Config struct {
 	// Strict makes the warnings within it errors: Report marks them, and Check
 	// returns them (#31). The zero value makes none strict.
 	Strict StrictScope
+
+	// Examples holds the document's example pairs (#20), read from ExamplesFile in it: by
+	// convention <document>-example.json beside the document (ExamplesFileFor), embedded
+	// in the binary as the document's source is, so nothing is read from disk at run
+	// time. With them set, the pairs are merged into the document, and a pair that does
+	// not fit, a body that does not validate as it should, and a documented status no pair
+	// shows are warnings.
+	Examples     fs.FS
+	ExamplesFile string
 }
 
 // Parameter represents an OpenAPI parameter (path, query, or header).
@@ -47,6 +58,8 @@ type Parameter struct {
 	Required    bool                   `json:"required" yaml:"required"`
 	Schema      map[string]interface{} `json:"schema,omitempty" yaml:"schema,omitempty"`
 	Example     interface{}            `json:"example,omitempty" yaml:"example,omitempty"`
+	// Examples are the parameter's named values, one per example pair (#20).
+	Examples map[string]interface{} `json:"examples,omitempty" yaml:"examples,omitempty"`
 }
 
 // RequestBody represents an OpenAPI request body.

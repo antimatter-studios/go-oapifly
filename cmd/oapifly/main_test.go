@@ -71,3 +71,67 @@ func TestReportUsage(t *testing.T) {
 		}
 	}
 }
+
+const answering = `package handlers
+
+// Thing gets a thing.
+// @ID getThing
+// @Success 200 {string} string "OK"
+// @Failure 404 {string} string "No such thing"
+// @Router /things [get]
+func Thing() {}
+`
+
+// examplesRun runs examples sync or check over one annotated handler, with the example file
+// in the same directory.
+func examplesRun(t *testing.T, dir, command string) (int, string, string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(dir, "handlers.go"), []byte(answering), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"examples", command, "--scan", filepath.Join(dir, "*.go"), "--file", filepath.Join(dir, "openapi-example.json")}, &stdout, &stderr)
+	return code, stdout.String(), stderr.String()
+}
+
+// sync writes a stub for each documented status, after which check finds nothing; check
+// reports a pair that does not fit and exits 1; a missing --file is a usage error.
+func TestExamples(t *testing.T) {
+	dir := t.TempDir()
+	if code, out, _ := examplesRun(t, dir, "check"); code != 1 || !strings.Contains(out, "examples-unreadable") {
+		t.Errorf("check with no file: exit %d, %q", code, out)
+	}
+	if code, out, errs := examplesRun(t, dir, "sync"); code != 0 || out != "" {
+		t.Fatalf("sync: exit %d, %q %q", code, out, errs)
+	}
+	written, err := os.ReadFile(filepath.Join(dir, "openapi-example.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var file map[string]map[string]map[string]interface{}
+	if err := json.Unmarshal(written, &file); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := file["getThing"]["status200"]; !ok || len(file["getThing"]) != 2 {
+		t.Errorf("stubs: %s", written)
+	}
+	if code, out, _ := examplesRun(t, dir, "check"); code != 0 || out != "" {
+		t.Errorf("check after sync: exit %d, %q", code, out)
+	}
+
+	broken := strings.Replace(string(written), `"status": 404`, `"status": 418`, 1)
+	if err := os.WriteFile(filepath.Join(dir, "openapi-example.json"), []byte(broken), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if code, out, _ := examplesRun(t, dir, "check"); code != 1 || !strings.Contains(out, "example-orphaned") || !strings.Contains(out, "example-missing") {
+		t.Errorf("check with a teapot: exit %d, %q", code, out)
+	}
+	if code, out, _ := examplesRun(t, dir, "sync"); code != 0 || !strings.Contains(out, "example-orphaned") {
+		t.Errorf("sync reports what it cannot fix: exit %d, %q", code, out)
+	}
+
+	var stdout, stderr bytes.Buffer
+	if code := run([]string{"examples", "check", "--scan", filepath.Join(dir, "*.go")}, &stdout, &stderr); code != 2 {
+		t.Errorf("no --file: exit %d", code)
+	}
+}

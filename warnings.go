@@ -91,6 +91,17 @@ const (
 	// WarnStatedTypeInvalid: a field states a JSON type that is not one, so
 	// it is described by its Go type.
 	WarnStatedTypeInvalid WarningKind = "stated-type-invalid"
+	// WarnExamplesUnreadable: Config.ExamplesFile cannot be read, or is not an
+	// example file.
+	WarnExamplesUnreadable WarningKind = "examples-unreadable"
+	// WarnExampleOrphaned: an example pair names an operation, a parameter, a
+	// request body, a status or a media type the document does not have.
+	WarnExampleOrphaned WarningKind = "example-orphaned"
+	// WarnExampleMissing: a documented status that no example pair shows.
+	WarnExampleMissing WarningKind = "example-missing"
+	// WarnExampleInvalid: an example body that does not validate against its
+	// schema, or a request marked invalid whose body does.
+	WarnExampleInvalid WarningKind = "example-invalid"
 )
 
 // Warning is one thing the generator described only in part, or left out. The
@@ -114,6 +125,7 @@ type Warning struct {
 	Header    string `json:"header,omitempty"`
 	Link      string `json:"link,omitempty"`
 	Scheme    string `json:"scheme,omitempty"`
+	Example   string `json:"example,omitempty"`
 
 	// Facts are the competing values, each with its source.
 	Facts []Fact `json:"facts,omitempty"`
@@ -247,8 +259,8 @@ func (g *Generator) Check() error {
 
 // warningLess orders warnings for the report.
 func warningLess(a, b Warning) bool {
-	ka := []string{a.Path, a.Method, a.OperationID, string(a.Kind), a.Status, a.Parameter, a.Field, a.Type, a.Header, a.Link, a.Scheme, a.File}
-	kb := []string{b.Path, b.Method, b.OperationID, string(b.Kind), b.Status, b.Parameter, b.Field, b.Type, b.Header, b.Link, b.Scheme, b.File}
+	ka := []string{a.Path, a.Method, a.OperationID, string(a.Kind), a.Status, a.Parameter, a.Field, a.Type, a.Header, a.Link, a.Scheme, a.Example, a.File}
+	kb := []string{b.Path, b.Method, b.OperationID, string(b.Kind), b.Status, b.Parameter, b.Field, b.Type, b.Header, b.Link, b.Scheme, b.Example, b.File}
 	for i := range ka {
 		if ka[i] != kb[i] {
 			return ka[i] < kb[i]

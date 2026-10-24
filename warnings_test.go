@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"testing/fstest"
 )
 
 type warnBody struct {
@@ -195,6 +196,22 @@ var warningCases = []warningCase{
 		map[string]interface{}{"parameter": "page"})},
 	{WarnStatedTypeInvalid, "", registered(map[string]interface{}{"operationId": "getThing", "field": "Bad"},
 		Endpoint{Method: "GET", Path: "/things", OperationID: "getThing", Responses: []EndpointResponse{{Status: 200, Type: TypeOf[warnStated]()}}})},
+	{WarnExamplesUnreadable, "", func(*testing.T) (*Generator, map[string]interface{}) {
+		g := New(Config{Examples: fstest.MapFS{}, ExamplesFile: "openapi-example.json"})
+		g.Register(Endpoint{Method: "GET", Path: "/things", OperationID: "getThing"})
+		return g, map[string]interface{}{"file": "openapi-example.json", "operationId": nil}
+	}},
+	{WarnExampleOrphaned, "", func(*testing.T) (*Generator, map[string]interface{}) {
+		return exampleGenerator(`{"getThing": {"teapot": {"request": {}, "response": {"status": 418}}}}`),
+			map[string]interface{}{"operationId": "getThing", "method": "GET", "path": "/things/{id}", "example": "teapot", "status": "418"}
+	}},
+	{WarnExampleMissing, "", func(*testing.T) (*Generator, map[string]interface{}) {
+		return exampleGenerator(`{}`), map[string]interface{}{"operationId": "getThing", "method": "GET", "path": "/things/{id}", "status": "404"}
+	}},
+	{WarnExampleInvalid, "", func(*testing.T) (*Generator, map[string]interface{}) {
+		return exampleGenerator(`{"createThing": {"wrongType": {"request": {"body": {"name": 5}}, "response": {"status": 201}}}}`),
+			map[string]interface{}{"operationId": "createThing", "method": "POST", "path": "/things", "example": "wrongType"}
+	}},
 }
 
 // Each kind of warning is reported with the operation, and what within it,
