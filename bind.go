@@ -25,6 +25,11 @@ import (
 // answers it with 400.
 var ErrMalformedBody = errors.New("oapifly: malformed request body")
 
+// ErrUnsupportedMediaType is what Bind answers for a body whose Content-Type is not one of the
+// forms a request type takes it in, when it takes it in several (#55). The error names the
+// media types it does take. A server answers it with 415.
+var ErrUnsupportedMediaType = errors.New("oapifly: unsupported media type")
+
 // Violations are the parts of a request that break the rules its type declares, each with
 // what is wrong with it. A parameter is named as it is in the request ("limit"), a body field
 // by its JSON path ("name", "owner.email", "members[2]"), and the body itself as "body". A
@@ -76,9 +81,14 @@ func Bind(v interface{}, param func(in, name string) (string, bool), body []byte
 // path, query and header fields are parameters, the field tagged body:"" is the body, and a
 // type with neither is the body itself.
 //
+// A request type that takes its body in several forms, a body field each, has the one its
+// Content-Type header names set and the others left nil; with no Content-Type it is the
+// first. A body is required in that case.
+//
 // It returns nil, Violations for a request that breaks the rules, an error wrapping
-// ErrMalformedBody for a body that cannot be read, or another error for a request type it
-// cannot bind, which is a programming error.
+// ErrMalformedBody for a body that cannot be read, one wrapping ErrUnsupportedMediaType for a
+// body in a form the type does not take, or another error for a request type it cannot bind,
+// which is a programming error.
 func (b Binder) Bind(v interface{}, param func(in, name string) (string, bool), body []byte) error {
 	rv := reflect.ValueOf(v)
 	if rv.Kind() != reflect.Pointer || rv.IsNil() {
@@ -88,7 +98,7 @@ func (b Binder) Bind(v interface{}, param func(in, name string) (string, bool), 
 	t := target.Type()
 	violations := Violations{}
 
-	params, bodyIndex := requestLayout(t)
+	params, forms := requestLayout(t)
 	for _, p := range params {
 		if err := b.bindParameter(target.FieldByIndex(p.index), p, param, violations); err != nil {
 			return err
@@ -96,9 +106,19 @@ func (b Binder) Bind(v interface{}, param func(in, name string) (string, bool), 
 	}
 
 	switch {
-	case bodyIndex != nil:
-		field := t.FieldByIndex(bodyIndex)
-		if err := b.bindBody(target.FieldByIndex(bodyIndex), field.Tag.Get("body"), body, violations); err != nil {
+	case len(forms) == 1:
+		if err := b.bindBody(target.FieldByIndex(forms[0].index), forms[0].media[0], body, violations); err != nil {
+			return err
+		}
+	case len(forms) > 1:
+		form, media, err := chooseForm(forms, param)
+		if err != nil {
+			return err
+		}
+		if len(bytes.TrimSpace(body)) == 0 {
+			return fmt.Errorf("%w: the request has no body", ErrMalformedBody)
+		}
+		if err := b.bindBody(target.FieldByIndex(form.index), media, body, violations); err != nil {
 			return err
 		}
 	case len(params) == 0 && !(t.Kind() == reflect.Struct && t.NumField() == 0):
@@ -120,14 +140,56 @@ type paramField struct {
 	tag      reflect.StructTag
 }
 
-// requestLayout finds a request type's parameter fields and its body field, by the rules
-// endpointRequest describes them with.
-func requestLayout(t reflect.Type) ([]paramField, []int) {
+// bodyForm is a body field and the media types it takes the body in.
+type bodyForm struct {
+	index []int
+	media []string
+}
+
+// bodyMediaTypes is the media types a body tag names, comma-separated: JSON when it names
+// none.
+func bodyMediaTypes(tag string) []string {
+	var media []string
+	for _, m := range strings.Split(tag, ",") {
+		if m = strings.TrimSpace(m); m != "" {
+			media = append(media, m)
+		}
+	}
+	if len(media) == 0 {
+		return []string{"application/json"}
+	}
+	return media
+}
+
+// chooseForm is the body form, and the media type in it, a request's Content-Type names: the
+// first when it names none.
+func chooseForm(forms []bodyForm, param func(in, name string) (string, bool)) (bodyForm, string, error) {
+	contentType, ok := param("header", "Content-Type")
+	if !ok || strings.TrimSpace(contentType) == "" {
+		return forms[0], forms[0].media[0], nil
+	}
+	got := strings.ToLower(strings.TrimSpace(strings.SplitN(contentType, ";", 2)[0]))
+	var accepted []string
+	for _, form := range forms {
+		for _, m := range form.media {
+			if strings.ToLower(strings.TrimSpace(strings.SplitN(m, ";", 2)[0])) == got {
+				return form, m, nil
+			}
+			accepted = append(accepted, m)
+		}
+	}
+	return bodyForm{}, "", fmt.Errorf("%w: %s; the body is taken as %s", ErrUnsupportedMediaType, got, strings.Join(accepted, ", "))
+}
+
+// requestLayout finds a request type's parameter fields and its body forms, by the rules
+// endpointRequest describes them with: a body field that names a media type an earlier one
+// takes is not another form.
+func requestLayout(t reflect.Type) ([]paramField, []bodyForm) {
 	if t.Kind() != reflect.Struct {
 		return nil, nil
 	}
 	var params []paramField
-	var bodyIndex []int
+	var forms []bodyForm
 	for i := 0; i < t.NumField(); i++ {
 		f := t.Field(i)
 		in := ""
@@ -144,11 +206,28 @@ func requestLayout(t reflect.Type) ([]paramField, []int) {
 				index: f.Index, in: in, name: name, tag: f.Tag,
 				required: in == "path" || hasOption(opts, "required"),
 			})
-		case hasTag(f, "body") && bodyIndex == nil:
-			bodyIndex = f.Index
+		case hasTag(f, "body"):
+			media := bodyMediaTypes(f.Tag.Get("body"))
+			if mediaTaken(forms, media) == "" {
+				forms = append(forms, bodyForm{index: f.Index, media: media})
+			}
 		}
 	}
-	return params, bodyIndex
+	return params, forms
+}
+
+// mediaTaken is a media type in media that one of forms already takes, "" when there is none.
+func mediaTaken(forms []bodyForm, media []string) string {
+	for _, form := range forms {
+		for _, a := range form.media {
+			for _, b := range media {
+				if strings.EqualFold(strings.TrimSpace(strings.SplitN(a, ";", 2)[0]), strings.TrimSpace(strings.SplitN(b, ";", 2)[0])) {
+					return b
+				}
+			}
+		}
+	}
+	return ""
 }
 
 func (b Binder) bindParameter(field reflect.Value, p paramField, param func(in, name string) (string, bool), out Violations) error {
