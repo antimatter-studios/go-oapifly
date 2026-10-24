@@ -12,6 +12,7 @@ Unlike traditional OpenAPI tools that generate code *from* a spec, oapifly works
 - **Schema extraction** - Automatically generates JSON Schema from Go struct types
 - **Generic types** - A generic envelope named in an annotation is described with its type parameters substituted
 - **Links** - Declare that a response leads to another operation, so a consumer can follow a create to its read
+- **Warnings a program can read** - Each with a stable kind and the operation it concerns, in a sorted JSON report, with strict mode for part of an API or all of it
 - **Framework agnostic** - Pure Go, no HTTP framework dependency. Wire it into any router yourself
 - **Zero config defaults** - Just point it at your source files
 
@@ -322,6 +323,52 @@ A struct is described as a closed object, `additionalProperties: false`, whichev
   ```
 
 - `Config.OpenStructs: true` describes every struct as open, as releases before v0.18.0 did, for an API whose server accepts and ignores unknown fields.
+
+## Warnings, the report and strict mode
+
+What the generator describes only in part, or leaves out, is a warning, never a guess. `Generator.Warnings` holds each one's sentence. `Generator.Report()` holds the same warnings as values a program can read. Each one has:
+- a stable `kind`, such as `unresolved-type`, `path-parameter-untyped` or `link-target-unknown`. The `Warn…` constants list every kind;
+- the operation it concerns: `operationId`, `method`, `path` and `tags`. A type is described once, at its first use, so a warning about a type that several operations share names the first of them;
+- what it concerns within the operation, where that is one of these: `status`, `parameter`, `field`, `type`, `header`, `link` or `scheme`;
+- the `file` and `line` it was read from, for an annotated handler or a type read from source;
+- its `severity` and its `message`.
+
+The report is sorted, so a run that changes nothing gives the same bytes:
+
+```go
+report, _ := generator.ReportJSON() // {"warnings": [...]}
+```
+
+```json
+{
+  "kind": "path-parameter-untyped",
+  "severity": "warning",
+  "operationId": "getDomain",
+  "method": "GET",
+  "path": "/api/v1/domains/{id}",
+  "parameter": "id",
+  "message": "GET /api/v1/domains/{id}: path parameter {id} has no field in the request type, described as a string"
+}
+```
+
+**Strict mode** turns the warnings within a scope into errors. The scope can be every warning, or those about the operations named by operationId, tag or path prefix. A path prefix matches at a segment boundary: `/api/v1/domains` covers `/api/v1/domains/{id}`, not `/api/v1/domains-x`. An API can drive one area to no warnings, then make that area strict so it cannot slip back:
+
+```go
+generator := oapifly.New(oapifly.Config{
+	Strict: oapifly.StrictScope{Tags: []string{"Domains"}, PathPrefixes: []string{"/api/v1/admin/domains"}},
+})
+if err := generator.Check(); err != nil { // a *oapifly.StrictError listing them
+	t.Fatal(err)
+}
+```
+
+For an API described by annotations, `oapifly report` prints the same. Install it with `go install github.com/antimatter-studios/go-oapifly/cmd/oapifly@latest`, then run:
+
+```sh
+oapifly report --scan 'internal/handlers/*.go' --types internal/types            # one line per warning
+oapifly report --json --scan 'internal/handlers/*.go' --types internal/types     # the JSON report
+oapifly report --strict-tag Domains --scan 'internal/handlers/*.go'              # exit 1 for an error
+```
 
 ## How it works
 

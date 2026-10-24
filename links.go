@@ -1,6 +1,7 @@
 package oapifly
 
 import (
+	"sort"
 	"strings"
 )
 
@@ -77,14 +78,14 @@ func attachLinks(responses map[string]Response, tagValues []string, operation st
 	for _, value := range tagValues {
 		link, ok := parseLink(value)
 		if !ok {
-			reg.warn("%s declares a link this generator cannot read (%q); the form is: @Link <status> <name> <targetOperationId> [<param>=<expression> ...]",
+			reg.warn(Warning{Kind: WarnAnnotationUnreadable}, "%s declares a link this generator cannot read (%q); the form is: @Link <status> <name> <targetOperationId> [<param>=<expression> ...]",
 				operation, value)
 			continue
 		}
 
 		response, declared := responses[link.Status]
 		if !declared {
-			reg.warn("%s hangs the link %q off a %s response it does not declare, so the link is left out",
+			reg.warn(Warning{Kind: WarnLinkResponseUndeclared, Link: link.Name, Status: link.Status}, "%s hangs the link %q off a %s response it does not declare, so the link is left out",
 				operation, link.Name, link.Status)
 			continue
 		}
@@ -96,7 +97,7 @@ func attachLinks(responses map[string]Response, tagValues []string, operation st
 		// the earlier relationship would vanish with nothing said. Usually a copied annotation
 		// whose name was not changed with its target.
 		if existing, taken := response.Links[link.Name]; taken {
-			reg.warn("%s declares the link %q on its %s response twice, to %q and then to %q; only the last survives",
+			reg.warn(Warning{Kind: WarnLinkDeclaredTwice, Link: link.Name, Status: link.Status}, "%s declares the link %q on its %s response twice, to %q and then to %q; only the last survives",
 				operation, link.Name, link.Status, existing.OperationID, link.OperationID)
 		}
 		response.Links[link.Name] = Link{OperationID: link.OperationID, Parameters: link.Parameters}
@@ -111,7 +112,7 @@ func attachLinks(responses map[string]Response, tagValues []string, operation st
 // checked: an operation may be linked to from a file parsed before its own. A link to an id
 // nothing declares is a chain a consumer cannot follow, and the usual cause is an @ID that was
 // renamed on one side only.
-func reportUnknownLinkTargets(paths map[string]map[string]PathItem, warn func(string, ...interface{})) {
+func reportUnknownLinkTargets(paths map[string]map[string]PathItem, reg *schemaRegistry) {
 	// Counted rather than collected into a set: the specification requires an operationId to be
 	// unique across the document, and a link naming one that two operations share does not say
 	// which of them it means - so a consumer following it picks one, and the description cannot
@@ -125,22 +126,41 @@ func reportUnknownLinkTargets(paths map[string]map[string]PathItem, warn func(st
 		}
 	}
 
-	for path, methods := range paths {
-		for method, item := range methods {
-			for status, response := range item.Responses {
-				for name, link := range response.Links {
+	for _, path := range sortedPaths(paths) {
+		for _, method := range pathItemMethods {
+			item, ok := paths[path][method]
+			if !ok {
+				continue
+			}
+			for _, status := range sortedKeys(item.Responses) {
+				links := item.Responses[status].Links
+				for _, name := range sortedKeys(links) {
+					link := links[name]
+					about := Warning{OperationID: item.OperationID, Method: strings.ToUpper(method), Path: path, Tags: item.Tags, Status: status, Link: name}
 					switch declared[link.OperationID] {
 					case 0:
-						warn("%s %s declares the link %q on its %s response to the operation %q, which nothing in this document declares",
+						about.Kind = WarnLinkTargetUnknown
+						reg.warn(about, "%s %s declares the link %q on its %s response to the operation %q, which nothing in this document declares",
 							strings.ToUpper(method), path, name, status, link.OperationID)
 					case 1:
 						// The only case that resolves to exactly one operation.
 					default:
-						warn("%s %s declares the link %q on its %s response to the operation %q, which %d operations declare, so the link does not say which one it means",
+						about.Kind = WarnLinkTargetAmbiguous
+						reg.warn(about, "%s %s declares the link %q on its %s response to the operation %q, which %d operations declare, so the link does not say which one it means",
 							strings.ToUpper(method), path, name, status, link.OperationID, declared[link.OperationID])
 					}
 				}
 			}
 		}
 	}
+}
+
+// sortedKeys is a map's keys in order.
+func sortedKeys[V any](m map[string]V) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
 }

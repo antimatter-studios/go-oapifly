@@ -89,33 +89,40 @@ func (g *Generator) Register(endpoints ...Endpoint) {
 func addEndpoints(endpoints []Endpoint, paths map[string]map[string]PathItem, defaultSecurity []SecurityRequirement, reg *schemaRegistry) {
 	seen := map[string]bool{}
 	for _, e := range endpoints {
-		method := strings.ToLower(strings.TrimSpace(e.Method))
-		if method == "" || e.Path == "" {
-			reg.warn("registered endpoint %q %q has no method or path, not described", e.Method, e.Path)
-			continue
-		}
-		if _, ok := methodsFor(method); !ok || method == "any" {
-			reg.warn("%s %s: '%s' is not a method a Path Item Object may carry, route not described", strings.ToUpper(method), e.Path, e.Method)
-			continue
-		}
-		key := method + " " + e.Path
-		registeredBefore := seen[key]
-		if registeredBefore {
-			reg.warn("%s %s is registered twice, the later registration is used", strings.ToUpper(method), e.Path)
-		}
-		seen[key] = true
-
-		item := buildEndpointItem(e, defaultSecurity, reg)
-		if _, ok := paths[e.Path]; !ok {
-			paths[e.Path] = map[string]PathItem{}
-		}
-		// Only an annotated description fills gaps; an earlier registration of the same route
-		// is simply replaced.
-		if annotated, ok := paths[e.Path][method]; ok && !registeredBefore {
-			item = fillFromAnnotation(item, annotated)
-		}
-		paths[e.Path][method] = item
+		restore := reg.describing(Warning{OperationID: e.OperationID, Method: strings.ToUpper(strings.TrimSpace(e.Method)), Path: e.Path, Tags: e.Tags})
+		addEndpoint(e, seen, paths, defaultSecurity, reg)
+		restore()
 	}
+}
+
+// addEndpoint describes one registered operation into paths.
+func addEndpoint(e Endpoint, seen map[string]bool, paths map[string]map[string]PathItem, defaultSecurity []SecurityRequirement, reg *schemaRegistry) {
+	method := strings.ToLower(strings.TrimSpace(e.Method))
+	if method == "" || e.Path == "" {
+		reg.warn(Warning{Kind: WarnRegistrationIncomplete}, "registered endpoint %q %q has no method or path, not described", e.Method, e.Path)
+		return
+	}
+	if _, ok := methodsFor(method); !ok || method == "any" {
+		reg.warn(Warning{Kind: WarnMethodNotDescribable}, "%s %s: '%s' is not a method a Path Item Object may carry, route not described", strings.ToUpper(method), e.Path, e.Method)
+		return
+	}
+	key := method + " " + e.Path
+	registeredBefore := seen[key]
+	if registeredBefore {
+		reg.warn(Warning{Kind: WarnRouteDescribedTwice}, "%s %s is registered twice, the later registration is used", strings.ToUpper(method), e.Path)
+	}
+	seen[key] = true
+
+	item := buildEndpointItem(e, defaultSecurity, reg)
+	if _, ok := paths[e.Path]; !ok {
+		paths[e.Path] = map[string]PathItem{}
+	}
+	// Only an annotated description fills gaps; an earlier registration of the same route
+	// is simply replaced.
+	if annotated, ok := paths[e.Path][method]; ok && !registeredBefore {
+		item = fillFromAnnotation(item, annotated)
+	}
+	paths[e.Path][method] = item
 }
 
 // fillFromAnnotation copies what comments are for - titles, descriptions, tags and the
@@ -153,7 +160,7 @@ func buildEndpointItem(e Endpoint, defaultSecurity []SecurityRequirement, reg *s
 		described := describeResponse(r, reg)
 		existing, dup := responses[status]
 		if dup && sharesMediaType(existing, described) {
-			reg.warn("%s: response %s is registered twice, the later one is used", route, status)
+			reg.warn(Warning{Kind: WarnResponseRegisteredTwice, Status: status}, "%s: response %s is registered twice, the later one is used", route, status)
 			dup = false
 		}
 		if dup {
@@ -220,7 +227,7 @@ func endpointRequest(route, path string, t reflect.Type, reg *schemaRegistry) ([
 					queryAndHeader = append(queryAndHeader, fieldParameter(f, "header", reg))
 				case hasTag(f, "body"):
 					if body != nil {
-						reg.warn("%s: %s has more than one body field, %s is ignored", route, typeDisplay(t), f.Name)
+						reg.warn(Warning{Kind: WarnBodyFieldAmbiguous, Type: typeDisplay(t), Field: f.Name}, "%s: %s has more than one body field, %s is ignored", route, typeDisplay(t), f.Name)
 						continue
 					}
 					media := f.Tag.Get("body")
@@ -246,7 +253,7 @@ func endpointRequest(route, path string, t reflect.Type, reg *schemaRegistry) ([
 	}
 
 	if len(unbound) > 0 {
-		reg.warn("%s: %s fields %s are neither parameters nor the body; tag them path, query or header, or mark a body field",
+		reg.warn(Warning{Kind: WarnFieldUnplaced, Type: typeDisplay(t), Field: strings.Join(unbound, ", ")}, "%s: %s fields %s are neither parameters nor the body; tag them path, query or header, or mark a body field",
 			route, typeDisplay(t), strings.Join(unbound, ", "))
 	}
 
@@ -259,7 +266,7 @@ func endpointRequest(route, path string, t reflect.Type, reg *schemaRegistry) ([
 			params = append(params, p)
 			continue
 		}
-		reg.warn("%s: path parameter {%s} has no field in the request type, described as a string", route, name)
+		reg.warn(Warning{Kind: WarnPathParameterUntyped, Parameter: name}, "%s: path parameter {%s} has no field in the request type, described as a string", route, name)
 		params = append(params, Parameter{
 			Name:        name,
 			In:          "path",
@@ -277,7 +284,7 @@ func endpointRequest(route, path string, t reflect.Type, reg *schemaRegistry) ([
 	}
 	sort.Strings(extra)
 	for _, name := range extra {
-		reg.warn("%s: request field for path parameter %q is not in the path template, not described", route, name)
+		reg.warn(Warning{Kind: WarnPathParameterUnrouted, Parameter: name}, "%s: request field for path parameter %q is not in the path template, not described", route, name)
 	}
 
 	return append(params, queryAndHeader...), body

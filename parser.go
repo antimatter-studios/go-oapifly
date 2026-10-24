@@ -2,7 +2,6 @@ package oapifly
 
 import (
 	"encoding/json"
-	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -19,6 +18,8 @@ import (
 
 type tagSet struct {
 	entries map[string][]string
+	// pos is where the handler whose doc comment holds the tags is declared.
+	pos token.Pos
 }
 
 func newTagSet() tagSet {
@@ -57,6 +58,10 @@ type schemaRegistry struct {
 	// nothing about a field is honest; one that guesses is not, and without a
 	// warning the caller has no way to learn its spec is incomplete.
 	warnings []string
+	// report is the same warnings as values (Generator.Report), and operation
+	// the one being described, which a warning found now concerns.
+	report    []Warning
+	operation Warning
 
 	// resolving guards against a type that reaches itself - a tree node with
 	// child nodes of its own type would otherwise recurse until the stack ends.
@@ -170,7 +175,7 @@ func (r *schemaRegistry) find(qualifier, name, display string) string {
 	for i, file := range files {
 		dirs[i] = filepath.Dir(file)
 	}
-	r.warn("type %s is declared in %s, and nothing says which is meant; the first is described: name it with its package",
+	r.warn(Warning{Kind: WarnTypeAmbiguous, Type: display}, "type %s is declared in %s, and nothing says which is meant; the first is described: name it with its package",
 		display, strings.Join(dirs, ", "))
 	return files[0]
 }
@@ -189,7 +194,7 @@ func (r *schemaRegistry) componentKey(file, name string) string {
 		if other, taken := r.keyDecls[qualified]; taken && other != decl {
 			qualified = sanitizeComponentKey(strings.ReplaceAll(strings.Trim(decl.dir, "/"), "/", ".") + "." + name)
 		}
-		r.warn("%s in %s and %s in %s share the name %s; the second is described as %s",
+		r.warn(Warning{Kind: WarnComponentNameCollision, Type: name}, "%s in %s and %s in %s share the name %s; the second is described as %s",
 			name, holder.dir, name, decl.dir, key, qualified)
 		key = qualified
 	}
@@ -228,10 +233,6 @@ func (r *schemaRegistry) packageName(dir string) string {
 	}
 	r.packages[dir] = name
 	return name
-}
-
-func (r *schemaRegistry) warn(format string, args ...interface{}) {
-	r.warnings = append(r.warnings, fmt.Sprintf(format, args...))
 }
 
 // stripPackagePrefix returns the short type name by removing any package prefix.
@@ -290,7 +291,7 @@ func (r *schemaRegistry) resolve(refType string) string {
 	// as models.Domain and a field reaches as Domain is one component (#26).
 	typeFile := r.locate(qualifier, shortName, refType)
 	if typeFile == "" {
-		r.warn("type %s named by an annotation is not in any configured TypeDirs, described as an untyped object", refType)
+		r.warn(Warning{Kind: WarnUnresolvedType, Type: refType}, "type %s named by an annotation is not in any configured TypeDirs, described as an untyped object", refType)
 		r.schemas[bare] = map[string]interface{}{"type": "object"}
 		r.annotated[refName] = bare
 		return bare
@@ -309,7 +310,7 @@ func (r *schemaRegistry) resolve(refType string) string {
 	schema, _ := r.inOwnScope(shortName, typeFile)
 	delete(r.resolving, key)
 	if schema == nil {
-		r.warn("type %s in %s has no schema this generator can express, described as an untyped object", refType, typeFile)
+		r.warn(Warning{Kind: WarnTypeUnexpressible, Type: refType, File: typeFile}, "type %s in %s has no schema this generator can express, described as an untyped object", refType, typeFile)
 		schema = map[string]interface{}{"type": "object"}
 	}
 
@@ -438,7 +439,7 @@ func applyParamConstraints(schema map[string]interface{}, p parsedParam, reg *sc
 		}
 		value := typedValue(bound.raw, openapiType)
 		if value == bound.raw && openapiType != "string" {
-			reg.warn("parameter %q declares %s(%s), which is not a %s, so the bound is left off",
+			reg.warn(Warning{Kind: WarnConstraintInvalid, Parameter: p.Name}, "parameter %q declares %s(%s), which is not a %s, so the bound is left off",
 				p.Name, bound.key, bound.raw, openapiType)
 			continue
 		}
@@ -454,7 +455,7 @@ func applyParamConstraints(schema map[string]interface{}, p parsedParam, reg *sc
 				// set. Keeping the rest would describe the parameter as forbidding whichever
 				// value the mistyped one meant, which rejects input the handler accepts; an
 				// unconstrained parameter is less precise and never wrong.
-				reg.warn("parameter %q declares the enum value %q, which is not a %s, so the whole enum is left off",
+				reg.warn(Warning{Kind: WarnConstraintInvalid, Parameter: p.Name}, "parameter %q declares the enum value %q, which is not a %s, so the whole enum is left off",
 					p.Name, entry, openapiType)
 				return
 			}
@@ -636,7 +637,7 @@ func schemaForNamedTypeAST(typeName, filePath string, reg *schemaRegistry) (sche
 			// the reader was sent looking for a type called T; an instantiation reaches its body
 			// through resolveGeneric instead, with the arguments bound.
 			if params := typeParamNames(typeSpec); len(params) > 0 && len(reg.typeArgs) == 0 {
-				reg.warn("%s declares type parameter(s) %s, so it cannot be described without arguments; name an instantiation such as %s[...]",
+				reg.warn(Warning{Kind: WarnTypeArgumentsMismatch, Type: typeName, File: filePath}, "%s declares type parameter(s) %s, so it cannot be described without arguments; name an instantiation such as %s[...]",
 					typeName, strings.Join(params, ", "), typeName)
 				return nil, false
 			}
@@ -648,7 +649,7 @@ func schemaForNamedTypeAST(typeName, filePath string, reg *schemaRegistry) (sche
 			// claiming a shape.
 			if iface, ok := typeSpec.Type.(*ast.InterfaceType); ok {
 				if iface.Methods != nil && len(iface.Methods.List) > 0 {
-					reg.warn("%s is an interface with methods, described as any value: its JSON shape is chosen at run time; give the API a concrete type", typeName)
+					reg.warn(Warning{Kind: WarnTypeChosenAtRuntime, Type: typeName, File: filePath}, "%s is an interface with methods, described as any value: its JSON shape is chosen at run time; give the API a concrete type", typeName)
 				}
 				return map[string]interface{}{}, false
 			}
@@ -672,7 +673,7 @@ func (r *schemaRegistry) embeddedFields(expr ast.Expr) (map[string]interface{}, 
 	qualifier, _ := splitQualified(display)
 	typeFile := r.locate(qualifier, name, display)
 	if typeFile == "" {
-		r.warn("embedded type %s is not in any configured TypeDirs, its fields are missing from the schema", display)
+		r.warn(Warning{Kind: WarnUnresolvedType, Type: display}, "embedded type %s is not in any configured TypeDirs, its fields are missing from the schema", display)
 		return nil, nil, true
 	}
 	guard := "embedded " + filepath.Dir(typeFile) + " " + name
@@ -686,7 +687,7 @@ func (r *schemaRegistry) embeddedFields(expr ast.Expr) (map[string]interface{}, 
 	delete(r.resolving, guard)
 
 	if !isStruct || schema == nil {
-		r.warn("embedded type %s in %s is not a struct, its fields are missing from the schema", display, typeFile)
+		r.warn(Warning{Kind: WarnEmbeddedNotStruct, Type: display, File: typeFile}, "embedded type %s in %s is not a struct, its fields are missing from the schema", display, typeFile)
 		return nil, nil, true
 	}
 
@@ -750,7 +751,7 @@ func buildSchemaFromStructAST(st *ast.StructType, reg *schemaRegistry) map[strin
 		schema := resolveFieldTypeAST(field.Type, reg)
 		if field.Tag != nil {
 			if stated, ok, problem := statedSchema(strings.Trim(field.Tag.Value, "`")); problem != "" {
-				reg.warn("field %s: %s; it is described by its Go type", jsonName, problem)
+				reg.warn(Warning{Kind: WarnStatedTypeInvalid, Field: jsonName}, "field %s: %s; it is described by its Go type", jsonName, problem)
 			} else if ok {
 				// The field says what its JSON is, which its Go type cannot (#46).
 				schema = stated
@@ -1013,7 +1014,7 @@ func resolveFieldTypeAST(expr ast.Expr, reg *schemaRegistry) map[string]interfac
 		// What an interface holds is chosen at run time, so the description cannot say:
 		// any value at all, never an object only (#27).
 		if t.Methods != nil && len(t.Methods.List) > 0 {
-			reg.warn("a field of an interface type with methods is described as any value: its JSON shape is chosen at run time; give the API a concrete type")
+			reg.warn(Warning{Kind: WarnTypeChosenAtRuntime}, "a field of an interface type with methods is described as any value: its JSON shape is chosen at run time; give the API a concrete type")
 		}
 		return map[string]interface{}{}
 	default:
@@ -1117,7 +1118,7 @@ func (r *schemaRegistry) refOrObject(typeName, displayName string) map[string]in
 	qualifier, _ := splitQualified(displayName)
 	typeFile := r.locate(qualifier, typeName, displayName)
 	if typeFile == "" {
-		r.warn("type %s is not in any configured TypeDirs, described as an untyped object", displayName)
+		r.warn(Warning{Kind: WarnUnresolvedType, Type: displayName}, "type %s is not in any configured TypeDirs, described as an untyped object", displayName)
 		return map[string]interface{}{"type": "object"}
 	}
 	key := r.componentKey(typeFile, typeName)
@@ -1136,7 +1137,7 @@ func (r *schemaRegistry) refOrObject(typeName, displayName string) map[string]in
 
 	if schema == nil {
 		r.releaseKey(typeFile, typeName)
-		r.warn("type %s in %s has no schema this generator can express, described as an untyped object", displayName, typeFile)
+		r.warn(Warning{Kind: WarnTypeUnexpressible, Type: displayName, File: typeFile}, "type %s in %s has no schema this generator can express, described as an untyped object", displayName, typeFile)
 		return map[string]interface{}{"type": "object"}
 	}
 
@@ -1218,12 +1219,19 @@ func extractSchemaAnnotatedStructs(f *ast.File) []string {
 
 // parseFile parses a Go source file and returns the AST.
 func parseFile(path string) (*ast.File, error) {
+	f, _, err := parseFileSet(path)
+	return f, err
+}
+
+// parseFileSet is parseFile with the file set its positions are in.
+func parseFileSet(path string) (*ast.File, *token.FileSet, error) {
 	src, err := os.ReadFile(path)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	fset := token.NewFileSet()
-	return parser.ParseFile(fset, path, src, parser.ParseComments)
+	f, err := parser.ParseFile(fset, path, src, parser.ParseComments)
+	return f, fset, err
 }
 
 // extractHandlerDocs extracts swaggo tags from functions with @Router annotations.
@@ -1236,6 +1244,7 @@ func extractHandlerDocs(f *ast.File) []tagSet {
 			continue
 		}
 		tags := newTagSet()
+		tags.pos = fn.Pos()
 		for _, comment := range fn.Doc.List {
 			line := strings.TrimSpace(strings.TrimPrefix(comment.Text, "//"))
 			if strings.HasPrefix(line, "@") {
@@ -1254,6 +1263,19 @@ func extractHandlerDocs(f *ast.File) []tagSet {
 		}
 	}
 	return docs
+}
+
+// annotatedTags is the operation tags a handler's @Tags names, nil without one.
+func annotatedTags(tags tagSet) []string {
+	v := tags.get("Tags")
+	if v == "" {
+		return nil
+	}
+	parts := strings.Split(v, ",")
+	for i, t := range parts {
+		parts[i] = strings.TrimSpace(t)
+	}
+	return parts
 }
 
 // parseRouterTag parses a @Router tag value into path and HTTP method.
@@ -1617,14 +1639,7 @@ func addExample(content map[string]interface{}, example parsedExample) {
 
 // buildPathItem parses swaggo tags and builds a PathItem with schema references.
 func buildPathItem(routerPath string, tags tagSet, reg *schemaRegistry) PathItem {
-	var tagsList []string
-	if v := tags.get("Tags"); v != "" {
-		parts := strings.Split(v, ",")
-		for i, t := range parts {
-			parts[i] = strings.TrimSpace(t)
-		}
-		tagsList = parts
-	}
+	tagsList := annotatedTags(tags)
 
 	params := parseAllParams(tags.getAll("Param"))
 
