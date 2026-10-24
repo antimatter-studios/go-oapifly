@@ -3,6 +3,7 @@ package oapifly
 import (
 	"go/ast"
 	"go/token"
+	"path/filepath"
 	"strings"
 )
 
@@ -161,10 +162,10 @@ func typeParamNames(typeSpec *ast.TypeSpec) []string {
 // place while descending made an ordinary field describe the generic's argument instead of its
 // own type.
 func (r *schemaRegistry) inOwnScope(typeName, typeFile string) (map[string]interface{}, bool) {
-	outer := r.typeArgs
-	r.typeArgs = nil
+	outer, outerDir := r.typeArgs, r.scopeDir
+	r.typeArgs, r.scopeDir = nil, filepath.Dir(typeFile)
 	schema, isStruct := schemaForNamedTypeAST(typeName, typeFile, r)
-	r.typeArgs = outer
+	r.typeArgs, r.scopeDir = outer, outerDir
 	return schema, isStruct
 }
 
@@ -238,10 +239,10 @@ func (r *schemaRegistry) schemaForInstantiation(shortBase string, args []string,
 				bound[param] = typeArg{text: args[i], schema: r.schemaForTypeText(args[i])}
 			}
 
-			previous := r.typeArgs
-			r.typeArgs = bound
+			previous, previousDir := r.typeArgs, r.scopeDir
+			r.typeArgs, r.scopeDir = bound, filepath.Dir(typeFile)
 			schema := r.instantiatedBody(typeSpec)
-			r.typeArgs = previous
+			r.typeArgs, r.scopeDir = previous, previousDir
 			return schema
 		}
 	}

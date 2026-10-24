@@ -1189,11 +1189,12 @@ type LoginRequest struct {
 	reg := newSchemaRegistry([]string{dir})
 	name := reg.resolve("restclient.LoginRequest")
 
-	if name != "restclient.LoginRequest" {
-		t.Errorf("name = %q, want restclient.LoginRequest", name)
+	// The only LoginRequest in the document keeps its own name (#26).
+	if name != "LoginRequest" {
+		t.Errorf("name = %q, want LoginRequest", name)
 	}
 
-	schema, ok := reg.schemas["restclient.LoginRequest"]
+	schema, ok := reg.schemas["LoginRequest"]
 	if !ok {
 		t.Fatal("schema not registered")
 	}

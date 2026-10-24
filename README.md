@@ -328,7 +328,7 @@ A struct is described as a closed object, `additionalProperties: false`, whichev
 2. **Parse** each file into a Go AST
 3. **Extract** swaggo `@Tag` annotations from handler method doc comments
 4. **Build** OpenAPI path items with parameters, responses, and schema references
-5. **Resolve** Go types to JSON Schema from their declarations, binding type parameters where a generic is instantiated
+5. **Resolve** Go types to JSON Schema from their declarations, binding type parameters where a generic is instantiated. A declaration is known by its package and name: a bare name in a struct is its own package's, a qualified one (`models.Domain`, in an annotation or a field) is found by its package's name, and a type reached both ways is one component. Two declarations sharing a name are two components, the second keyed with its package (`models.Attachment`); a name that could be either and says neither is reported
 6. **Return** a complete OpenAPI 3.1 spec as `map[string]interface{}`
 
 The annotation path reads source files at runtime, so an application using it must be deployed alongside its source code, or at least the annotated files. Registered operations need no source at all.
