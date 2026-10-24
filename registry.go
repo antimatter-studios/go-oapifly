@@ -195,6 +195,8 @@ func endpointRequest(route, path string, t reflect.Type, reg *schemaRegistry) ([
 	var queryAndHeader []Parameter
 	var body *RequestBody
 	var unbound []string
+	var forms []bodyForm
+	var formFields []reflect.StructField
 
 	if t != nil {
 		for t.Kind() == reflect.Pointer {
@@ -226,28 +228,48 @@ func endpointRequest(route, path string, t reflect.Type, reg *schemaRegistry) ([
 				case f.Tag.Get("header") != "":
 					queryAndHeader = append(queryAndHeader, fieldParameter(f, "header", reg))
 				case hasTag(f, "body"):
-					if body != nil {
+					media := bodyMediaTypes(f.Tag.Get("body"))
+					if mediaTaken(forms, media) != "" {
 						reg.warn(Warning{Kind: WarnBodyFieldAmbiguous, Type: typeDisplay(t), Field: f.Name}, "%s: %s has more than one body field, %s is ignored", route, typeDisplay(t), f.Name)
 						continue
 					}
-					media := f.Tag.Get("body")
-					if media == "" {
-						media = "application/json"
-					}
-					required := f.Type.Kind() != reflect.Pointer
-					described := f.Type
-					if !required && !isJSONMedia(media) {
-						// An optional body that is not JSON is left out, never JSON null: it is
-						// described as what it is when it is there (#50).
-						described = f.Type.Elem()
-					}
-					body = jsonBody(reg.reflectSchema(described), media)
-					body.Required = required
+					forms = append(forms, bodyForm{index: f.Index, media: media})
+					formFields = append(formFields, f)
 				default:
 					if f.IsExported() && f.Tag.Get("json") != "-" {
 						unbound = append(unbound, f.Name)
 					}
 				}
+			}
+		}
+	}
+
+	switch {
+	case len(formFields) == 1:
+		f, media := formFields[0], forms[0].media
+		required := f.Type.Kind() != reflect.Pointer
+		described := f.Type
+		if !required && !isJSONMedia(media[0]) {
+			// An optional body that is not JSON is left out, never JSON null: it is
+			// described as what it is when it is there (#50).
+			described = f.Type.Elem()
+		}
+		body = jsonBody(reg.reflectSchema(described), media[0])
+		for _, m := range media[1:] {
+			body.Content[m] = map[string]interface{}{"schema": reg.reflectSchema(described)}
+		}
+		body.Required = required
+	case len(formFields) > 1:
+		// A body taken in several forms is required in one of them, each described as what
+		// it is when it is there (#55).
+		body = &RequestBody{Required: true, Content: map[string]interface{}{}}
+		for _, f := range formFields {
+			described := f.Type
+			if described.Kind() == reflect.Pointer {
+				described = described.Elem()
+			}
+			for _, m := range bodyMediaTypes(f.Tag.Get("body")) {
+				body.Content[m] = map[string]interface{}{"schema": reg.reflectSchema(described)}
 			}
 		}
 	}
