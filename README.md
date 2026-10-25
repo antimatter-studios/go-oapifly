@@ -410,6 +410,7 @@ A document's examples are kept beside it, in `<document>-example.json`: `openapi
 
 - A request has `path`, `query` and `header` values, by name, and a `body`. `mediaType` names the request media type the body is in, when there are several. `invalid: true` marks a request meant to break its schema, the request of a 400 or 422 pair.
 - A response has its `status`, and optionally its `body` and `mediaType`.
+- A pair may set `operation` to another operationId: for example, `unknownId` may stay under `createDomain` while targeting `getDomain`. Its parameters, body and response are checked against the target operation. Two pairs targeting the same operation and example name are reported as a collision; sync preserves the source groups and does not add a second stub for an overridden pair.
 
 Give the generator the file through an `fs.FS`, embedded as the rest of the server is, so nothing is read from disk at run time:
 
@@ -432,6 +433,8 @@ Each pair goes into the document under its name: the request body into its media
 oapifly examples sync  --file openapi-example.json --scan 'internal/handlers/*.go'   # add the stubs
 oapifly examples check --file openapi-example.json --scan 'internal/handlers/*.go'   # exit 1 on any problem
 ```
+
+The dedicated CI example-pair check runs the generated document through the pinned Vertrag executable against a small HTTP fixture. It verifies all three named 201/404/422 exchanges, the missing-field body and the different path id, and proves that a wrong status or response shape fails. This checks the tool boundary; applications still prove their pairs against their running server. To run it locally, set `OAPIFLY_VERTRAG_BINARY` to the executable and run `go test . -run '^TestNamedExamplesWithVertrag$' -count=1`.
 
 ## How it works
 
