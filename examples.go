@@ -21,6 +21,9 @@ type ExampleFile map[string]map[string]ExamplePair
 
 // ExamplePair is one exchange: a request and the response it provokes.
 type ExamplePair struct {
+	// Operation sends this pair to another operationId while keeping it in its
+	// original group in the companion file. Empty means the group's operationId.
+	Operation   string          `json:"operation,omitempty"`
 	Summary     string          `json:"summary,omitempty"`
 	Description string          `json:"description,omitempty"`
 	Request     ExampleRequest  `json:"request"`
@@ -126,6 +129,7 @@ func operationsByID(paths map[string]map[string]PathItem) map[string]located {
 // reported, and so is every documented status of an operation that no pair shows, and every
 // body that does not validate as it should.
 func mergeExamples(paths map[string]map[string]PathItem, file ExampleFile, components map[string]map[string]interface{}, reg *schemaRegistry) {
+	file = examplesByOperation(file, reg)
 	byID := operationsByID(paths)
 	shown := map[string]map[string]bool{} // operationId -> statuses a pair shows
 	for _, id := range sortedKeys(file) {
@@ -176,6 +180,35 @@ func mergeExamples(paths map[string]map[string]PathItem, file ExampleFile, compo
 			}
 		}
 	}
+}
+
+// examplesByOperation resolves a pair's optional operation without rewriting the
+// companion file. Two groups may not define the same name for the same operation:
+// neither request can be paired unambiguously with a response under that name.
+func examplesByOperation(file ExampleFile, reg *schemaRegistry) ExampleFile {
+	out := ExampleFile{}
+	origins := map[string]map[string]string{}
+	for _, group := range sortedKeys(file) {
+		for _, name := range sortedKeys(file[group]) {
+			pair := file[group][name]
+			id := pair.Operation
+			if id == "" {
+				id = group
+			}
+			if out[id] == nil {
+				out[id] = map[string]ExamplePair{}
+				origins[id] = map[string]string{}
+			}
+			if previous, exists := origins[id][name]; exists {
+				reg.warn(Warning{Kind: WarnExampleOrphaned, OperationID: id, Example: name},
+					"example %s of %s: groups %s and %s target the same operation and name; the first is used", name, id, previous, group)
+				continue
+			}
+			out[id][name] = pair
+			origins[id][name] = group
+		}
+	}
+	return out
 }
 
 // ownCopy is item with its own parameters, request body and responses, so changing them
@@ -482,6 +515,7 @@ func (g *Generator) ExampleStubs() (ExampleFile, error) {
 	defer g.mu.Unlock()
 	g.generate()
 	paths, _ := g.cached["paths"].(map[string]map[string]PathItem)
+	resolved := examplesByOperation(file, &schemaRegistry{})
 	for _, path := range sortedPaths(paths) {
 		for _, method := range pathItemMethods {
 			item, ok := paths[path][method]
@@ -489,7 +523,7 @@ func (g *Generator) ExampleStubs() (ExampleFile, error) {
 				continue
 			}
 			shown := map[int]bool{}
-			for _, pair := range file[item.OperationID] {
+			for _, pair := range resolved[item.OperationID] {
 				shown[pair.Response.Status] = true
 			}
 			for _, status := range sortedKeys(item.Responses) {
