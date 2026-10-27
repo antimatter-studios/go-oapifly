@@ -65,6 +65,11 @@ type EndpointResponse struct {
 	MediaType string
 	// Headers are the headers the response carries, by name: Retry-After on a 429.
 	Headers map[string]ResponseHeader
+	// Links are the operations this response leads to, by name, as an @Link annotation
+	// declares them: a create's 201 linking to the read of what it made, its parameters
+	// filled from runtime expressions such as $response.body#/id. A link to an operation
+	// the document does not declare is reported.
+	Links map[string]Link
 }
 
 // TypeOf returns the type of T, for an Endpoint's Request and a response's Type:

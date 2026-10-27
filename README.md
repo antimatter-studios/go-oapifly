@@ -102,6 +102,16 @@ responses:
         parameters: {deviceGuid: "$response.body#/guid"}
 ```
 
+A registered operation states the same link on its response:
+
+```go
+oapifly.EndpointResponse{Status: 201, Type: oapifly.TypeOf[Device](), Links: map[string]oapifly.Link{
+	"Read": {OperationID: "readDevice", Parameters: map[string]string{"deviceGuid": "$response.body#/guid"}},
+}}
+```
+
+A link to an operation the document does not declare is reported the same way.
+
 The form is `@Link <status> <name> <targetOperationId> [<param>=<expression> ...]`. The status
 must be a response the operation declares — `default` and the `2XX` ranges included, since those
 are response keys too; the name is free-form and appears verbatim in a

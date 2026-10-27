@@ -69,6 +69,12 @@ func describeResponse(r EndpointResponse, reg *schemaRegistry) Response {
 		desc = http.StatusText(r.Status)
 	}
 	resp := Response{Description: desc, Headers: describeHeaders(r.Headers, reg)}
+	if len(r.Links) > 0 {
+		resp.Links = make(map[string]Link, len(r.Links))
+		for name, link := range r.Links {
+			resp.Links[name] = link
+		}
+	}
 	media := r.MediaType
 	if media == "" && r.Type != nil {
 		media = "application/json"
@@ -125,6 +131,14 @@ func withContentOf(a, b Response) Response {
 				a.Headers = map[string]Header{}
 			}
 			a.Headers[name] = h
+		}
+	}
+	for name, link := range b.Links {
+		if _, ok := a.Links[name]; !ok {
+			if a.Links == nil {
+				a.Links = map[string]Link{}
+			}
+			a.Links[name] = link
 		}
 	}
 	return a
