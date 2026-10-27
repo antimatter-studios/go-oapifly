@@ -280,3 +280,47 @@ func TestAPairOutsideAParameterEnumIsLeftOut(t *testing.T) {
 		}
 	}
 }
+
+// A pair's requires reaches each of its Example Objects as x-requires, and a kind or value
+// the vocabulary does not list is reported (#62).
+func TestAPairsRequiresReachesTheDocumentAndIsChecked(t *testing.T) {
+	file := `{
+  "getThing": {
+    "found": {"request": {"path": {"id": 1}}, "response": {"status": 200, "body": {"id": 1, "name": "x"}}},
+    "storageDown": {"requires": {"fault": "database"}, "request": {"path": {"id": 1}}, "response": {"status": 404, "body": {"code": "not_found"}}},
+    "typoKind": {"requires": {"falut": "database"}, "request": {"path": {"id": 2}}, "response": {"status": 404, "body": {"code": "not_found"}}},
+    "typoValue": {"requires": {"fault": "databse"}, "request": {"path": {"id": 3}}, "response": {"status": 404, "body": {"code": "not_found"}}}
+  }
+}`
+	g := New(Config{
+		Examples:            fstest.MapFS{"openapi-example.json": {Data: []byte(file)}},
+		ExamplesFile:        "openapi-example.json",
+		ExampleRequirements: map[string][]string{"fault": {"database"}, "principal": {"app_password"}},
+	})
+	g.Register(Endpoint{Method: "GET", Path: "/things/{id}", OperationID: "getThing", Request: TypeOf[exThingPath](),
+		Responses: []EndpointResponse{{Status: 200, Type: TypeOf[exThing]()}, {Status: 404, Type: TypeOf[exError]()}}})
+	spec := g.Generate()
+
+	get := operation(t, spec, "/things/{id}", "get")
+	examples := get.Responses["404"].Content["application/json"].(map[string]interface{})["examples"].(map[string]interface{})
+	if got := asJSON(t, examples["storageDown"]); got != `{"value":{"code":"not_found"},"x-requires":{"fault":"database"}}` {
+		t.Errorf("404 storageDown %s", got)
+	}
+	param := get.Parameters[parameterIndex(get.Parameters, "path", "id")].Examples
+	if got := asJSON(t, param["storageDown"]); got != `{"value":1,"x-requires":{"fault":"database"}}` {
+		t.Errorf("id storageDown %s", got)
+	}
+	if got := asJSON(t, param["found"]); got != `{"value":1}` {
+		t.Errorf("a pair with no requires carries none: %s", got)
+	}
+
+	reported := map[string]bool{}
+	for _, w := range g.Report() {
+		if w.Kind == WarnExampleRequirementUnknown {
+			reported[w.Example] = true
+		}
+	}
+	if !reported["typoKind"] || !reported["typoValue"] || reported["storageDown"] || reported["found"] {
+		t.Errorf("unknown requirements reported for %v, want typoKind and typoValue only", reported)
+	}
+}

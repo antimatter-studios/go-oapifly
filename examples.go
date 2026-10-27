@@ -24,11 +24,16 @@ type ExampleFile map[string]map[string]ExamplePair
 type ExamplePair struct {
 	// Operation sends this pair to another operationId while keeping it in its
 	// original group in the companion file. Empty means the group's operationId.
-	Operation   string          `json:"operation,omitempty"`
-	Summary     string          `json:"summary,omitempty"`
-	Description string          `json:"description,omitempty"`
-	Request     ExampleRequest  `json:"request"`
-	Response    ExampleResponse `json:"response"`
+	Operation   string `json:"operation,omitempty"`
+	Summary     string `json:"summary,omitempty"`
+	Description string `json:"description,omitempty"`
+	// Requires is what proving the pair needs, by kind: a fault injected, a principal
+	// signed in, an oversized body sent (#62). Empty means nothing. The document carries
+	// it on each of the pair's Example Objects as x-requires, for a tester to choose what
+	// it can prove; Config.ExampleRequirements is its vocabulary.
+	Requires map[string]string `json:"requires,omitempty"`
+	Request  ExampleRequest    `json:"request"`
+	Response ExampleResponse   `json:"response"`
 }
 
 // ExampleRequest is the request half of a pair: its parameter values by where they are and
@@ -129,7 +134,7 @@ func operationsByID(paths map[string]map[string]PathItem) map[string]located {
 // into its response media type's, all under the pair's name. What it cannot place is
 // reported, and so is every documented status of an operation that no pair shows, and every
 // body that does not validate as it should.
-func mergeExamples(paths map[string]map[string]PathItem, file ExampleFile, components map[string]map[string]interface{}, reg *schemaRegistry) {
+func mergeExamples(paths map[string]map[string]PathItem, file ExampleFile, components map[string]map[string]interface{}, requirements map[string][]string, reg *schemaRegistry) {
 	file = examplesByOperation(file, reg)
 	byID := operationsByID(paths)
 	shown := map[string]map[string]bool{} // operationId -> statuses a pair shows
@@ -150,6 +155,7 @@ func mergeExamples(paths map[string]map[string]PathItem, file ExampleFile, compo
 			pair := file[id][name]
 			w := about
 			w.Example = name
+			checkRequirements(pair, requirements, w, reg)
 			if placeExample(&item, name, pair, w, reg) {
 				if shown[id] == nil {
 					shown[id] = map[string]bool{}
@@ -247,6 +253,13 @@ func placeExample(item *PathItem, name string, pair ExamplePair, about Warning, 
 	if pair.Description != "" {
 		summary["description"] = pair.Description
 	}
+	if len(pair.Requires) > 0 {
+		requires := make(map[string]interface{}, len(pair.Requires))
+		for kind, value := range pair.Requires {
+			requires[kind] = value
+		}
+		summary["x-requires"] = requires
+	}
 
 	if outsideParameterEnum(item.Parameters, pair) {
 		// A Parameter Object's examples must be enum values, or Dredd-style testers refuse
@@ -320,6 +333,32 @@ func placeExample(item *PathItem, name string, pair ExamplePair, about Warning, 
 	response.Content = withNamedExample(response.Content, media, name, copyMap(example))
 	item.Responses[status] = response
 	return true
+}
+
+// checkRequirements reports each requirement of a pair that the vocabulary does not list:
+// an unknown kind, or a value its kind does not allow.
+func checkRequirements(pair ExamplePair, requirements map[string][]string, about Warning, reg *schemaRegistry) {
+	for _, kind := range sortedKeys(pair.Requires) {
+		value := pair.Requires[kind]
+		allowed, known := requirements[kind]
+		w := about
+		w.Kind = WarnExampleRequirementUnknown
+		switch {
+		case !known:
+			reg.warn(w, "example %s of %s: requires %q, which is not a known kind of requirement", about.Example, about.OperationID, kind)
+		case !containsString(allowed, value):
+			reg.warn(w, "example %s of %s: requires %s %q, which is not one of %s", about.Example, about.OperationID, kind, value, strings.Join(allowed, ", "))
+		}
+	}
+}
+
+func containsString(list []string, s string) bool {
+	for _, item := range list {
+		if item == s {
+			return true
+		}
+	}
+	return false
 }
 
 // outsideParameterEnum reports whether one of the pair's parameter values is not among

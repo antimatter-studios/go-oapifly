@@ -48,6 +48,12 @@ type Config struct {
 	// shows are warnings.
 	Examples     fs.FS
 	ExamplesFile string
+
+	// ExampleRequirements is the vocabulary a pair's Requires is held to (#62): each kind
+	// of requirement with the values it may take, such as "fault": {"database"}. A pair
+	// requiring a kind or a value not listed here is reported, so a typo is an error
+	// rather than a pair no tester proves.
+	ExampleRequirements map[string][]string
 }
 
 // Parameter represents an OpenAPI parameter (path, query, or header).

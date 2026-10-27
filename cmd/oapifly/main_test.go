@@ -135,3 +135,54 @@ func TestExamples(t *testing.T) {
 		t.Errorf("no --file: exit %d", code)
 	}
 }
+
+// check holds a pair's requires to the vocabulary --requires gives, and sync keeps it (#62).
+func TestExamplesRequires(t *testing.T) {
+	dir := t.TempDir()
+	if code, _, errs := examplesRun(t, dir, "sync"); code != 0 {
+		t.Fatalf("sync: exit %d, %q", code, errs)
+	}
+	path := filepath.Join(dir, "openapi-example.json")
+	written, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var file map[string]map[string]map[string]interface{}
+	if err := json.Unmarshal(written, &file); err != nil {
+		t.Fatal(err)
+	}
+	for name := range file["getThing"] {
+		file["getThing"][name]["requires"] = map[string]string{"fault": "database"}
+		break
+	}
+	b, _ := json.Marshal(file)
+	if err := os.WriteFile(path, b, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	check := func(requires ...string) (int, string) {
+		args := []string{"examples", "check", "--scan", filepath.Join(dir, "*.go"), "--file", path}
+		for _, r := range requires {
+			args = append(args, "--requires", r)
+		}
+		var stdout, stderr bytes.Buffer
+		return run(args, &stdout, &stderr), stdout.String() + stderr.String()
+	}
+	if code, out := check("fault=database,storage"); code != 0 {
+		t.Errorf("a listed requirement: exit %d, %q", code, out)
+	}
+	if code, out := check("fault=storage"); code != 1 || !strings.Contains(out, "example-requirement-unknown") {
+		t.Errorf("an unlisted value: exit %d, %q", code, out)
+	}
+	if code, out := check(); code != 1 || !strings.Contains(out, "example-requirement-unknown") {
+		t.Errorf("no vocabulary at all: exit %d, %q", code, out)
+	}
+	if code, _ := check("fault"); code != 2 {
+		t.Errorf("--requires without values: exit %d, want 2", code)
+	}
+	if code, _, errs := examplesRun(t, dir, "sync"); code != 0 {
+		t.Fatalf("second sync: exit %d, %q", code, errs)
+	}
+	if kept, _ := os.ReadFile(path); !strings.Contains(string(kept), `"requires"`) {
+		t.Errorf("sync dropped requires: %s", kept)
+	}
+}
