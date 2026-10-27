@@ -65,6 +65,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 type options struct {
 	fs                                              *flag.FlagSet
 	scan, types, strictOps, strictTags, strictPaths list
+	requires                                        list
 	title, version, file                            *string
 	strictAll                                       *bool
 }
@@ -85,6 +86,7 @@ func newOptions(name string, stderr io.Writer, withFile bool) *options {
 	fs.Var(&o.strictOps, "strict-operation", "make the warnings about an operationId errors (repeatable)")
 	fs.Var(&o.strictTags, "strict-tag", "make the warnings about a tag's operations errors (repeatable)")
 	fs.Var(&o.strictPaths, "strict-path", "make the warnings about paths under a prefix errors (repeatable)")
+	fs.Var(&o.requires, "requires", "a kind of requirement and the values a pair may require of it, kind=value,value (repeatable)")
 	if withFile {
 		o.file = fs.String("file", "", "the example file, such as openapi-example.json")
 	} else {
@@ -97,6 +99,12 @@ func newOptions(name string, stderr io.Writer, withFile bool) *options {
 func (o *options) parse(args []string, needFile bool) bool {
 	if err := o.fs.Parse(args); err != nil {
 		return false
+	}
+	for _, entry := range o.requires {
+		if kind, values, ok := strings.Cut(entry, "="); !ok || kind == "" || values == "" {
+			fmt.Fprintf(o.fs.Output(), "-requires %q: want kind=value,value\n", entry)
+			return false
+		}
 	}
 	if len(o.scan) == 0 || o.fs.NArg() > 0 || (needFile && *o.file == "") {
 		o.fs.Usage()
@@ -117,6 +125,13 @@ func (o *options) generator() *oapifly.Generator {
 			Tags:         o.strictTags,
 			PathPrefixes: o.strictPaths,
 		},
+	}
+	for _, entry := range o.requires {
+		kind, values, _ := strings.Cut(entry, "=")
+		if config.ExampleRequirements == nil {
+			config.ExampleRequirements = map[string][]string{}
+		}
+		config.ExampleRequirements[kind] = append(config.ExampleRequirements[kind], strings.Split(values, ",")...)
 	}
 	if *o.file != "" {
 		config.Examples = os.DirFS(filepath.Dir(*o.file))
@@ -157,6 +172,8 @@ var exampleKinds = map[oapifly.WarningKind]bool{
 	oapifly.WarnExampleOrphaned:    true,
 	oapifly.WarnExampleMissing:     true,
 	oapifly.WarnExampleInvalid:     true,
+
+	oapifly.WarnExampleRequirementUnknown: true,
 }
 
 func examplesCommand(command string, args []string, stdout, stderr io.Writer) int {

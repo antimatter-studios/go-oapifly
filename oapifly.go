@@ -189,7 +189,7 @@ func (g *Generator) generate() map[string]interface{} {
 		if err != nil {
 			reg.warn(Warning{Kind: WarnExamplesUnreadable, File: g.Config.ExamplesFile}, "example file %s: %v", g.Config.ExamplesFile, err)
 		} else {
-			mergeExamples(paths, file, reg.schemas, reg)
+			mergeExamples(paths, file, reg.schemas, g.Config.ExampleRequirements, reg)
 		}
 	}
 

@@ -410,6 +410,7 @@ A document's examples are kept beside it, in `<document>-example.json`: `openapi
 
 - A request has `path`, `query` and `header` values, by name, and a `body`. `mediaType` names the request media type the body is in, when there are several. `invalid: true` marks a request meant to break its schema, the request of a 400 or 422 pair.
 - A response has its `status`, and optionally its `body` and `mediaType`.
+- A pair may set `requires` to what proving it needs, by kind: `{"fault": "database"}`, `{"principal": "app_password"}`. A pair with none needs nothing. The application declares the vocabulary (`Config.ExampleRequirements`, or `--requires kind=value,value` on the command line). A kind or value it does not list is reported as `example-requirement-unknown`, so a typo is an error rather than a pair nobody proves. The document carries `requires` on each of the pair's Example Objects as `x-requires`, so a contract tester can prove the pairs whose requirements it can set up and report the rest.
 - A pair may set `operation` to another operationId: for example, `unknownId` may stay under `createDomain` while targeting `getDomain`. Its parameters, body and response are checked against the target operation. Two pairs targeting the same operation and example name are reported as a collision; sync preserves the source groups and does not add a second stub for an overridden pair.
 
 Give the generator the file through an `fs.FS`, embedded as the rest of the server is, so nothing is read from disk at run time:
@@ -425,6 +426,7 @@ Each pair goes into the document under its name: the request body into its media
 - `example-orphaned`: a pair names an operation, parameter, body, status or media type the document does not have. It is left out, never deleted;
 - `example-invalid`: a JSON body does not validate against its schema, or a request marked invalid has one that does;
 - `example-missing`: a documented status that no pair shows;
+- `example-requirement-unknown`: a pair requires a kind or value the vocabulary does not list;
 - `examples-unreadable`: the file cannot be read.
 
 `Generator.ExampleStubs()` returns the file with a stub added for every documented status no pair shows, for a person or an agent to fill in, and `oapifly.MarshalExamples` writes it the same way every time. For an annotated API:

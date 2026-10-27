@@ -102,6 +102,9 @@ const (
 	// WarnExampleInvalid: an example body that does not validate against its
 	// schema, or a request marked invalid whose body does.
 	WarnExampleInvalid WarningKind = "example-invalid"
+	// WarnExampleRequirementUnknown: an example pair requires a kind or a value
+	// that Config.ExampleRequirements does not list.
+	WarnExampleRequirementUnknown WarningKind = "example-requirement-unknown"
 )
 
 // Warning is one thing the generator described only in part, or left out. The
