@@ -421,7 +421,7 @@ var examples embed.FS
 generator := oapifly.New(oapifly.Config{Examples: examples, ExamplesFile: "openapi-example.json"})
 ```
 
-Each pair goes into the document under its name: the request body into its media type's `examples`, each parameter value into the parameter's `examples`, and the response body into its response's. A contract tester pairs a request with the response of the same name. With a file set, these are warnings in the report, so strict mode can hold an area to them:
+Each pair goes into the document under its name: the request body into its media type's `examples`, each parameter value into the parameter's `examples`, and the response body into its response's. A contract tester pairs a request with the response of the same name. A pair whose parameter value is not one of that parameter's `enum` values stays out of the document, since Dredd-style testers refuse a description whose parameter example is outside its enum; it remains in the file for the application's own tests and still shows its status. With a file set, these are warnings in the report, so strict mode can hold an area to them:
 - `example-orphaned`: a pair names an operation, parameter, body, status or media type the document does not have. It is left out, never deleted;
 - `example-invalid`: a JSON body does not validate against its schema, or a request marked invalid has one that does;
 - `example-missing`: a documented status that no pair shows;
