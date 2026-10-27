@@ -281,11 +281,11 @@ func placeExample(item *PathItem, name string, pair ExamplePair, about Warning, 
 			p := &item.Parameters[i]
 			if p.Examples == nil {
 				p.Examples = map[string]interface{}{}
-				// example and examples are mutually exclusive in a Parameter Object.
-				if p.Example != nil {
-					p.Examples["example"] = map[string]interface{}{"value": p.Example}
-					p.Example = nil
-				}
+				// example and examples are mutually exclusive in a Parameter Object. The
+				// pairs' values are the parameter's examples now: the annotation's single
+				// value is not kept beside them as "example", which names no exchange and
+				// would make a contract tester send a request no pair describes.
+				p.Example = nil
 			}
 			p.Examples[name] = withValue(summary, values[param])
 		}

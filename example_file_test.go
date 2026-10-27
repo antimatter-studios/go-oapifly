@@ -324,3 +324,31 @@ func TestAPairsRequiresReachesTheDocumentAndIsChecked(t *testing.T) {
 		t.Errorf("unknown requirements reported for %v, want typoKind and typoValue only", reported)
 	}
 }
+
+type exThingExamplePath struct {
+	ID int64 `path:"id" example:"5"`
+}
+
+// Once pairs give a parameter its named values, the annotation's single example is not
+// kept beside them as "example": no response carries that name, so a contract tester
+// would send it as an exchange of its own that no pair describes.
+func TestPairsReplaceAParametersAnnotatedExample(t *testing.T) {
+	g := exampleGenerator(`{
+  "removeThing": {
+    "gone": {"request": {"path": {"id": 7}}, "response": {"status": 204}},
+    "missing": {"request": {"path": {"id": 999999}}, "response": {"status": 404, "body": {"code": "not_found"}}}
+  }
+}`,
+		Endpoint{Method: "DELETE", Path: "/things/{id}", OperationID: "removeThing", Request: TypeOf[exThingExamplePath](),
+			Responses: []EndpointResponse{{Status: 204}, {Status: 404, Type: TypeOf[exError]()}}},
+	)
+	spec := g.Generate()
+	del := operation(t, spec, "/things/{id}", "delete")
+	param := del.Parameters[parameterIndex(del.Parameters, "path", "id")]
+	if got := asJSON(t, param.Examples); got != `{"gone":{"value":7},"missing":{"value":999999}}` {
+		t.Errorf("id examples %s", got)
+	}
+	if param.Example != nil {
+		t.Errorf("the annotated example is still set: %v", param.Example)
+	}
+}
