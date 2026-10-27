@@ -247,3 +247,36 @@ func TestExamplesFileFor(t *testing.T) {
 		}
 	}
 }
+
+type exThingFilter struct {
+	Kind *string `query:"kind" enums:"alpha,beta"`
+}
+
+// A pair whose parameter value is outside that parameter's enum stays out of the document:
+// Dredd-style testers refuse a description whose parameter example is not an enum value.
+// Its status still counts as shown, so no example is reported missing.
+func TestAPairOutsideAParameterEnumIsLeftOut(t *testing.T) {
+	g := exampleGenerator(`{
+  "listThings": {
+    "alpha": {"request": {"query": {"kind": "alpha"}}, "response": {"status": 200, "body": []}},
+    "unknownKind": {"request": {"query": {"kind": "gamma"}, "invalid": true}, "response": {"status": 422, "body": {"code": "validation_failed"}}}
+  }
+}`,
+		Endpoint{Method: "GET", Path: "/things", OperationID: "listThings", Request: TypeOf[exThingFilter](),
+			Responses: []EndpointResponse{{Status: 200, Type: TypeOf[[]exThing]()}, {Status: 422, Type: TypeOf[exError]()}}},
+	)
+	spec := g.Generate()
+
+	list := operation(t, spec, "/things", "get")
+	if got := asJSON(t, list.Parameters[parameterIndex(list.Parameters, "query", "kind")].Examples); got != `{"alpha":{"value":"alpha"}}` {
+		t.Errorf("kind examples %s", got)
+	}
+	if examples, ok := list.Responses["422"].Content["application/json"].(map[string]interface{})["examples"]; ok {
+		t.Errorf("the 422 response took the left-out pair: %s", asJSON(t, examples))
+	}
+	for _, w := range g.Report() {
+		if w.OperationID == "listThings" {
+			t.Errorf("unexpected warning: %+v", w)
+		}
+	}
+}

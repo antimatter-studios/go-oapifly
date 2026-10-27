@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"reflect"
 	"strconv"
 	"strings"
 
@@ -247,6 +248,13 @@ func placeExample(item *PathItem, name string, pair ExamplePair, about Warning, 
 		summary["description"] = pair.Description
 	}
 
+	if outsideParameterEnum(item.Parameters, pair) {
+		// A Parameter Object's examples must be enum values, or Dredd-style testers refuse
+		// the whole description. The pair stays in the file for the application's own tests
+		// and still counts as showing its status.
+		return true
+	}
+
 	for _, in := range []string{"path", "query", "header"} {
 		values := map[string]map[string]interface{}{"path": pair.Request.Path, "query": pair.Request.Query, "header": pair.Request.Header}[in]
 		for _, param := range sortedKeys(values) {
@@ -312,6 +320,33 @@ func placeExample(item *PathItem, name string, pair ExamplePair, about Warning, 
 	response.Content = withNamedExample(response.Content, media, name, copyMap(example))
 	item.Responses[status] = response
 	return true
+}
+
+// outsideParameterEnum reports whether one of the pair's parameter values is not among
+// the enum values its parameter allows.
+func outsideParameterEnum(params []Parameter, pair ExamplePair) bool {
+	for in, values := range map[string]map[string]interface{}{"path": pair.Request.Path, "query": pair.Request.Query, "header": pair.Request.Header} {
+		for param, value := range values {
+			i := parameterIndex(params, in, param)
+			if i < 0 {
+				continue
+			}
+			enum := reflect.ValueOf(params[i].Schema["enum"])
+			if enum.Kind() != reflect.Slice {
+				continue
+			}
+			got, _ := json.Marshal(value)
+			allowed := false
+			for j := 0; j < enum.Len() && !allowed; j++ {
+				option, _ := json.Marshal(enum.Index(j).Interface())
+				allowed = bytes.Equal(got, option)
+			}
+			if !allowed {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // parameterIndex is the index of the parameter in and named name, -1 when there is none.
