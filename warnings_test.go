@@ -212,6 +212,10 @@ var warningCases = []warningCase{
 		return exampleGenerator(`{"createThing": {"wrongType": {"request": {"body": {"name": 5}}, "response": {"status": 201}}}}`),
 			map[string]interface{}{"operationId": "createThing", "method": "POST", "path": "/things", "example": "wrongType"}
 	}},
+	{WarnExampleRequirementUnknown, "", func(*testing.T) (*Generator, map[string]interface{}) {
+		return exampleGenerator(`{"getThing": {"storageDown": {"requires": {"fault": "database"}, "request": {"path": {"id": 1}}, "response": {"status": 404}}}}`),
+			map[string]interface{}{"operationId": "getThing", "method": "GET", "path": "/things/{id}", "example": "storageDown"}
+	}},
 }
 
 // Each kind of warning is reported with the operation, and what within it,
