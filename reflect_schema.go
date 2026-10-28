@@ -198,6 +198,7 @@ func (r *schemaRegistry) reflectStructBody(t reflect.Type) map[string]interface{
 	if len(required) > 0 {
 		result["required"] = required
 	}
+	r.anyOfSchema(t, result)
 	closeUnlessOpen(result, open)
 	return result
 }

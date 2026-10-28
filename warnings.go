@@ -91,6 +91,9 @@ const (
 	// WarnStatedTypeInvalid: a field states a JSON type that is not one, so
 	// it is described by its Go type.
 	WarnStatedTypeInvalid WarningKind = "stated-type-invalid"
+	// WarnAnyOfUnknownField: an AnyOf rule constrains a property its type does
+	// not declare, so that constraint is left out of the schema.
+	WarnAnyOfUnknownField WarningKind = "any-of-unknown-field"
 	// WarnExamplesUnreadable: Config.ExamplesFile cannot be read, or is not an
 	// example file.
 	WarnExamplesUnreadable WarningKind = "examples-unreadable"
