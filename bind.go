@@ -428,7 +428,7 @@ func (b Binder) check(raw json.RawMessage, t reflect.Type, tag reflect.StructTag
 		}
 		// A rule over several fields is judged once each field holds on its own (#68).
 		if len(out) == 0 {
-			if where, message, broken := b.anyOfProblem(obj, t, path); broken {
+			for where, message := range b.anyOfProblems(obj, t, path) {
 				out[where] = message
 			}
 		}
@@ -700,6 +700,10 @@ func constraintProblem(v reflect.Value, tag reflect.StructTag) (problem, constra
 		}
 		if format := tag.Get("format"); format != "" && !formatHolds(format, s) {
 			return "must be a valid " + format, "format"
+		}
+	case reflect.Bool:
+		if enums := tag.Get("enums"); enums != "" && !oneOf(strconv.FormatBool(v.Bool()), enums) {
+			return "must be one of " + listed(enums), "enums"
 		}
 	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
 		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64,

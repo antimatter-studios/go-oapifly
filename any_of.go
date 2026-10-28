@@ -16,7 +16,8 @@ type AnyOf interface {
 
 // AnyOfRule is the alternatives a body may meet, and how a body meeting none is refused: at
 // Field, saying Message. Without a Field it is reported at the body; without a Message it
-// says "must meet one of its alternatives".
+// says "must meet one of its alternatives". An alternative with its own Message explains
+// the refusal instead.
 type AnyOfRule struct {
 	Alternatives []Alternative
 	Field        string
@@ -25,10 +26,14 @@ type AnyOfRule struct {
 
 // Alternative is one way to meet an AnyOfRule: the properties it needs present and not null,
 // and constraints on properties in the tag vocabulary (`minItems:"1"`), which hold of a
-// property only when it is present.
+// property only when it is present. With a Message or Messages, a body meeting no alternative
+// is refused at each property this one lacks or breaks, saying that property's entry in
+// Messages, else Message: "required when enabled" at subject, body or both.
 type Alternative struct {
 	Required []string
 	Fields   map[string]string
+	Message  string
+	Messages map[string]string
 }
 
 // anyOfRule is the rule t states, if it states one.
@@ -67,7 +72,9 @@ func (r *schemaRegistry) anyOfSchema(t reflect.Type, schema map[string]interface
 					"%s anyOf names %s, which it does not declare", typeDisplay(t), name)
 				continue
 			}
-			constraint := map[string]interface{}{"type": r.reflectSchema(f.typ)["type"]}
+			// The constraint holds of a present value, so null, which the field's own
+			// schema answers for, does not join an enum here.
+			constraint := map[string]interface{}{"type": nonNullType(r.reflectSchema(f.typ)["type"])}
 			applyTagConstraints(constraint, alt.Fields[name])
 			delete(constraint, "type")
 			props[name] = constraint
@@ -83,18 +90,53 @@ func (r *schemaRegistry) anyOfSchema(t reflect.Type, schema map[string]interface
 	schema["anyOf"] = alternatives
 }
 
-// anyOfProblem reports, for a body read as obj, whether it meets none of t's alternatives,
-// and where and how that is said.
-func (b Binder) anyOfProblem(obj map[string]json.RawMessage, t reflect.Type, path string) (string, string, bool) {
+// nonNullType is a schema type without null: "boolean" for ["boolean","null"].
+func nonNullType(t interface{}) interface{} {
+	types, ok := t.([]interface{})
+	if !ok {
+		return t
+	}
+	var kept []interface{}
+	for _, each := range types {
+		if each != "null" {
+			kept = append(kept, each)
+		}
+	}
+	if len(kept) == 1 {
+		return kept[0]
+	}
+	return kept
+}
+
+// anyOfProblems reports, for a body read as obj, where and how it is refused when it meets
+// none of t's alternatives; nothing when it meets one.
+func (b Binder) anyOfProblems(obj map[string]json.RawMessage, t reflect.Type, path string) Violations {
 	rule, ok := anyOfRule(t)
 	if !ok || len(rule.Alternatives) == 0 {
-		return "", "", false
+		return nil
 	}
 	fields := structFieldsOf(t)
 	for _, alt := range rule.Alternatives {
-		if b.meets(obj, fields, alt, path) {
-			return "", "", false
+		if len(b.unmet(obj, fields, alt)) == 0 {
+			return nil
 		}
+	}
+	for _, alt := range rule.Alternatives {
+		if alt.Message == "" && len(alt.Messages) == 0 {
+			continue
+		}
+		problems := Violations{}
+		for _, name := range b.unmet(obj, fields, alt) {
+			message := alt.Messages[name]
+			if message == "" {
+				message = alt.Message
+			}
+			if message == "" {
+				message = "required"
+			}
+			problems[join(path, name)] = message
+		}
+		return problems
 	}
 	where := at(path)
 	if rule.Field != "" {
@@ -104,14 +146,17 @@ func (b Binder) anyOfProblem(obj map[string]json.RawMessage, t reflect.Type, pat
 	if message == "" {
 		message = "must meet one of its alternatives"
 	}
-	return where, message, true
+	return Violations{where: message}
 }
 
-func (b Binder) meets(obj map[string]json.RawMessage, fields *structFields, alt Alternative, path string) bool {
+// unmet is the properties of obj that alt needs present and finds absent or null, or whose
+// constraints they break.
+func (b Binder) unmet(obj map[string]json.RawMessage, fields *structFields, alt Alternative) []string {
+	var names []string
 	for _, name := range alt.Required {
 		value, present := obj[name]
 		if !present || isNull(value) {
-			return false
+			names = append(names, name)
 		}
 	}
 	for name, tag := range alt.Fields {
@@ -121,10 +166,10 @@ func (b Binder) meets(obj map[string]json.RawMessage, fields *structFields, alt 
 			continue
 		}
 		problems := Violations{}
-		b.check(value, f.typ, reflect.StructTag(tag), join(path, name), problems)
+		b.check(value, f.typ, reflect.StructTag(tag), name, problems)
 		if len(problems) > 0 {
-			return false
+			names = append(names, name)
 		}
 	}
-	return true
+	return names
 }
