@@ -426,6 +426,12 @@ func (b Binder) check(raw json.RawMessage, t reflect.Type, tag reflect.StructTag
 			}
 			b.check(value, f.typ, f.tag, join(path, key), out)
 		}
+		// A rule over several fields is judged once each field holds on its own (#68).
+		if len(out) == 0 {
+			if where, message, broken := b.anyOfProblem(obj, t, path); broken {
+				out[where] = message
+			}
+		}
 	case reflect.Map:
 		var obj map[string]json.RawMessage
 		if json.Unmarshal(raw, &obj) != nil {

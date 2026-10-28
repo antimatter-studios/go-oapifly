@@ -196,6 +196,8 @@ var warningCases = []warningCase{
 		map[string]interface{}{"parameter": "page"})},
 	{WarnStatedTypeInvalid, "", registered(map[string]interface{}{"operationId": "getThing", "field": "Bad"},
 		Endpoint{Method: "GET", Path: "/things", OperationID: "getThing", Responses: []EndpointResponse{{Status: 200, Type: TypeOf[warnStated]()}}})},
+	{WarnAnyOfUnknownField, "", registered(map[string]interface{}{"operationId": "createThing", "field": "missing"},
+		Endpoint{Method: "POST", Path: "/things", OperationID: "createThing", Request: TypeOf[warnAnyOf](), Responses: []EndpointResponse{{Status: 201}}})},
 	{WarnExamplesUnreadable, "", func(*testing.T) (*Generator, map[string]interface{}) {
 		g := New(Config{Examples: fstest.MapFS{}, ExamplesFile: "openapi-example.json"})
 		g.Register(Endpoint{Method: "GET", Path: "/things", OperationID: "getThing"})
@@ -505,4 +507,13 @@ func TestStrictModeIsScoped(t *testing.T) {
 			t.Errorf("%s has severity %s", w.OperationID, w.Severity)
 		}
 	}
+}
+
+// warnAnyOf's rule constrains a property it does not declare.
+type warnAnyOf struct {
+	Name string `json:"name,omitempty"`
+}
+
+func (warnAnyOf) AnyOf() AnyOfRule {
+	return AnyOfRule{Alternatives: []Alternative{{Fields: map[string]string{"missing": `minLength:"1"`}}}}
 }
