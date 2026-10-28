@@ -318,7 +318,7 @@ err := oapifly.Bind(&req, func(in, name string) (string, bool) {
 - Violations are keyed by parameter name (`limit`), or by the body field's JSON path (`owner.email`, `members[2].name`); the body as a whole is `body`. Every broken rule is reported, not just the first.
 - A parameter is required when it is in the path or its tag says `,required`. A body field without `omitempty` is required, and only a pointer field may be `null`.
 - Structs are closed: an undeclared property is refused unless the struct is open (see below). `oapifly.Binder{OpenStructs: true}.Bind` goes with `Config.OpenStructs`.
-- Values must have their described type, and the constraint tags must hold: `minimum` and `maximum` on numbers; `minLength`, `maxLength` (in characters), `pattern`, `enums` and `format` on strings; `enums` on numbers; `minItems` and `maxItems` on lists. A tag that is not a number of the right kind is left out of the document and is not enforced either.
+- Values must have their described type, and the constraint tags must hold: `minimum` and `maximum` on numbers; `minLength`, `maxLength` (in characters), `pattern`, `enums` and `format` on strings; `enums` on numbers and booleans; `minItems` and `maxItems` on lists. A tag that is not a number of the right kind is left out of the document and is not enforced either.
 - `format` is checked for `email`, `uuid`, `date-time`, `date`, `uri`, `hostname`, `ipv4` and `ipv6`. Other formats are described and not checked, as JSON Schema treats a format it does not know as an annotation.
 - Types that read themselves (`time.Time`, `uuid.UUID`) are checked by reading them, and `json.RawMessage` accepts anything.
 - A field whose Go type cannot say what its JSON is (a `json.RawMessage`, or a named `[]byte` that writes JSON of its own) states it with `type:"string|integer|number|boolean|array|object"`, and an array's item type with `items:"..."`: `To json.RawMessage `+"`"+`json:"to" type:"array" items:"string"`+"`"+`. The stated type is what both description paths write, nullable for a pointer field, and what Bind checks the value against, with the other constraint tags on top. A type that is not one of those is reported, and the Go type kept.
@@ -333,6 +333,23 @@ err := oapifly.Bind(&req, func(in, name string) (string, bool) {
               {Required: []string{"filter"}},
           },
           Field: "ids", Message: "send at least one id, or a filter",
+      }
+  }
+  ```
+
+  An alternative with its own `Message` explains a refusal instead: the body is refused at each property that alternative lacks or breaks, saying that `Message`. A reply that is off, or on with a subject and a body, names the parts it lacks:
+
+  ```go
+  func (vacationRequest) AnyOf() oapifly.AnyOfRule {
+      return oapifly.AnyOfRule{
+          Alternatives: []oapifly.Alternative{
+              {Fields: map[string]string{"enabled": `enums:"false"`}},
+              {
+                  Required: []string{"subject", "body"},
+                  Fields:   map[string]string{"subject": `minLength:"1"`, "body": `minLength:"1"`},
+                  Message:  "required when enabled",
+              },
+          },
       }
   }
   ```

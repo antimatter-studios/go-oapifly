@@ -68,3 +68,61 @@ func TestAnAnyOfRuleIsEnforced(t *testing.T) {
 		})
 	}
 }
+
+// vacationReply is off, or on with a subject and a body. A refusal names each field the
+// reply lacks, as the explained alternative's Message says.
+type vacationReply struct {
+	Enabled *bool  `json:"enabled"`
+	Subject string `json:"subject,omitempty"`
+	Body    string `json:"body,omitempty"`
+}
+
+func (vacationReply) AnyOf() AnyOfRule {
+	return AnyOfRule{
+		Alternatives: []Alternative{
+			{Fields: map[string]string{"enabled": `enums:"false"`}},
+			{
+				Required: []string{"subject", "body"},
+				Fields:   map[string]string{"subject": `minLength:"1"`, "body": `minLength:"1"`},
+				Message:  "required when enabled",
+			},
+		},
+	}
+}
+
+func TestAnExplainedAlternativeIsDescribed(t *testing.T) {
+	reg := newSchemaRegistry(nil)
+	schema := reg.reflectStructBody(reflect.TypeOf(vacationReply{}))
+	got, _ := json.Marshal(schema["anyOf"])
+	want := `[{"properties":{"enabled":{"enum":[false]}}},{"properties":{"body":{"minLength":1},"subject":{"minLength":1}},"required":["subject","body"]}]`
+	if string(got) != want {
+		t.Fatalf("anyOf = %s, want %s", got, want)
+	}
+}
+
+func TestAnExplainedAlternativeNamesEachUnmetField(t *testing.T) {
+	for _, tc := range []struct {
+		body string
+		want map[string]string
+	}{
+		{`{"enabled":false}`, nil},
+		{`{"enabled":true,"subject":"Away","body":"Back soon."}`, nil},
+		{`{"enabled":true}`, map[string]string{"subject": "required when enabled", "body": "required when enabled"}},
+		{`{"enabled":true,"subject":"Away"}`, map[string]string{"body": "required when enabled"}},
+		{`{"enabled":true,"subject":"","body":"Back soon."}`, map[string]string{"subject": "required when enabled"}},
+	} {
+		t.Run(tc.body, func(t *testing.T) {
+			var v vacationReply
+			err := Bind(&v, noParams, []byte(tc.body))
+			if tc.want == nil {
+				if err != nil {
+					t.Fatalf("refused: %v", err)
+				}
+				return
+			}
+			if got := violations(t, err); !reflect.DeepEqual(map[string]string(got), tc.want) {
+				t.Fatalf("violations = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
