@@ -126,3 +126,37 @@ func TestAnExplainedAlternativeNamesEachUnmetField(t *testing.T) {
 		})
 	}
 }
+
+// relayTransport is direct, or a relay with a host, port and mode, each worded as its own
+// field is (#70).
+type relayTransport struct {
+	Transport string  `json:"transport" enums:"direct,relay"`
+	Host      string  `json:"host,omitempty"`
+	Port      *int    `json:"port,omitempty" minimum:"1"`
+	TLSMode   *string `json:"tls_mode,omitempty" enums:"starttls,implicit"`
+}
+
+func (relayTransport) AnyOf() AnyOfRule {
+	return AnyOfRule{
+		Alternatives: []Alternative{
+			{Fields: map[string]string{"transport": `enums:"direct"`}},
+			{
+				Required: []string{"host", "port", "tls_mode"},
+				Fields:   map[string]string{"transport": `enums:"relay"`, "host": `minLength:"1"`},
+				Messages: map[string]string{"port": "Must be between 1 and 65535", "tls_mode": "Must be one of: starttls, implicit"},
+			},
+		},
+	}
+}
+
+func TestAnExplainedAlternativeWordsEachField(t *testing.T) {
+	var v relayTransport
+	if err := Bind(&v, noParams, []byte(`{"transport":"direct"}`)); err != nil {
+		t.Fatalf("direct refused: %v", err)
+	}
+	err := Bind(&v, noParams, []byte(`{"transport":"relay","host":""}`))
+	want := map[string]string{"host": "required", "port": "Must be between 1 and 65535", "tls_mode": "Must be one of: starttls, implicit"}
+	if got := violations(t, err); !reflect.DeepEqual(map[string]string(got), want) {
+		t.Fatalf("violations = %v, want %v", got, want)
+	}
+}

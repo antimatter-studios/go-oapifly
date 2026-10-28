@@ -26,13 +26,14 @@ type AnyOfRule struct {
 
 // Alternative is one way to meet an AnyOfRule: the properties it needs present and not null,
 // and constraints on properties in the tag vocabulary (`minItems:"1"`), which hold of a
-// property only when it is present. With a Message, a body meeting no alternative is refused
-// at each property this one lacks or breaks, saying Message: "required when enabled" at
-// subject, body or both.
+// property only when it is present. With a Message or Messages, a body meeting no alternative
+// is refused at each property this one lacks or breaks, saying that property's entry in
+// Messages, else Message: "required when enabled" at subject, body or both.
 type Alternative struct {
 	Required []string
 	Fields   map[string]string
 	Message  string
+	Messages map[string]string
 }
 
 // anyOfRule is the rule t states, if it states one.
@@ -121,12 +122,19 @@ func (b Binder) anyOfProblems(obj map[string]json.RawMessage, t reflect.Type, pa
 		}
 	}
 	for _, alt := range rule.Alternatives {
-		if alt.Message == "" {
+		if alt.Message == "" && len(alt.Messages) == 0 {
 			continue
 		}
 		problems := Violations{}
 		for _, name := range b.unmet(obj, fields, alt) {
-			problems[join(path, name)] = alt.Message
+			message := alt.Messages[name]
+			if message == "" {
+				message = alt.Message
+			}
+			if message == "" {
+				message = "required"
+			}
+			problems[join(path, name)] = message
 		}
 		return problems
 	}

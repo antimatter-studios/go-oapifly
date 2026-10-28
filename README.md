@@ -337,7 +337,7 @@ err := oapifly.Bind(&req, func(in, name string) (string, bool) {
   }
   ```
 
-  An alternative with its own `Message` explains a refusal instead: the body is refused at each property that alternative lacks or breaks, saying that `Message`. A reply that is off, or on with a subject and a body, names the parts it lacks:
+  An alternative with its own `Message` explains a refusal instead: the body is refused at each property that alternative lacks or breaks, saying that `Message`, or the property's entry in the alternative's `Messages` where one words it differently. A reply that is off, or on with a subject and a body, names the parts it lacks:
 
   ```go
   func (vacationRequest) AnyOf() oapifly.AnyOfRule {
