@@ -163,6 +163,7 @@ func mergeExamples(paths map[string]map[string]PathItem, file ExampleFile, compo
 				shown[id][strconv.Itoa(pair.Response.Status)] = true
 			}
 		}
+		nameBodylessResponses(&item, file[id])
 		paths[at.path][at.method] = item
 	}
 
@@ -333,6 +334,32 @@ func placeExample(item *PathItem, name string, pair ExamplePair, about Warning, 
 	response.Content = withNamedExample(response.Content, media, name, copyMap(example))
 	item.Responses[status] = response
 	return true
+}
+
+// nameBodylessResponses gives a response with no body the name of its pair, as x-example,
+// where an operation has several such responses told apart only by their requests: a 304
+// and a 412, say. With no Example Object to carry a name, a tester would otherwise send
+// each of those requests expecting each of those statuses. A status shown by several
+// pairs stays unnamed, since one name cannot speak for them all, and so does an
+// operation's only bodyless response, which nothing confuses it with.
+func nameBodylessResponses(item *PathItem, pairs map[string]ExamplePair) {
+	names := map[string][]string{}
+	for _, name := range sortedKeys(pairs) {
+		status := strconv.Itoa(pairs[name].Response.Status)
+		if response, ok := item.Responses[status]; ok && len(response.Content) == 0 {
+			names[status] = append(names[status], name)
+		}
+	}
+	if len(names) < 2 {
+		return
+	}
+	for status, named := range names {
+		if len(named) == 1 {
+			response := item.Responses[status]
+			response.Example = named[0]
+			item.Responses[status] = response
+		}
+	}
 }
 
 // checkRequirements reports each requirement of a pair that the vocabulary does not list:

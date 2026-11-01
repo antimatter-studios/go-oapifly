@@ -161,3 +161,40 @@ func examplesOf(t *testing.T, content map[string]interface{}, mediaType string) 
 	}
 	return examples
 }
+
+func TestBodylessResponsesAreNamedOnlyWhenTheyCanBeConfused(t *testing.T) {
+	statuses := func(codes ...string) map[string]map[string]PathItem {
+		responses := map[string]Response{}
+		for _, code := range codes {
+			responses[code] = Response{Description: code}
+		}
+		return map[string]map[string]PathItem{"/x": {"get": {OperationID: "getX", Responses: responses}}}
+	}
+	pair := func(status int) ExamplePair { return ExamplePair{Response: ExampleResponse{Status: status}} }
+	for _, test := range []struct {
+		name  string
+		codes []string
+		pairs map[string]ExamplePair
+		want  map[string]string
+	}{
+		{"several, one pair each", []string{"304", "412"},
+			map[string]ExamplePair{"not_modified": pair(304), "precondition_failed": pair(412)},
+			map[string]string{"304": "not_modified", "412": "precondition_failed"}},
+		{"the only bodyless response", []string{"204"},
+			map[string]ExamplePair{"deleted": pair(204)}, map[string]string{"204": ""}},
+		{"a status two pairs show", []string{"304", "412"},
+			map[string]ExamplePair{"a": pair(304), "b": pair(304), "c": pair(412)},
+			map[string]string{"304": "", "412": "c"}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			paths := statuses(test.codes...)
+			reg := newSchemaRegistry(nil)
+			mergeExamples(paths, ExampleFile{"getX": test.pairs}, nil, nil, reg)
+			for code, want := range test.want {
+				if got := paths["/x"]["get"].Responses[code].Example; got != want {
+					t.Errorf("%s named %q, want %q", code, got, want)
+				}
+			}
+		})
+	}
+}

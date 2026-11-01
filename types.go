@@ -94,6 +94,9 @@ type Response struct {
 	Links map[string]Link `json:"links,omitempty" yaml:"links,omitempty"`
 	// Headers are the headers the response carries, by name.
 	Headers map[string]Header `json:"headers,omitempty" yaml:"headers,omitempty"`
+	// Example is the name of the pair a response with no body belongs to, as x-example:
+	// see nameBodylessResponses.
+	Example string `json:"x-example,omitempty" yaml:"x-example,omitempty"`
 }
 
 // Link represents an OpenAPI Link Object: a named step from this response to another operation,
